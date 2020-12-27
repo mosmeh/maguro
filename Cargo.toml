@@ -1,0 +1,25 @@
+[package]
+name = "maguro"
+version = "0.1.0"
+authors = ["Yuta Imazu <yuta.imazu@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+anyhow = "1.0.36"
+bincode = "1.3.1"
+bio = "0.32.0"
+bitvec = "0.20.1"
+bstr = "0.2.14"
+itertools = "0.10.0"
+ksw2 = { path = "ksw2" }
+libc = "0.2.81"
+serde = { version = "1.0.118", features = ["derive"] }
+structopt = "0.3.21"
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "maguro"
+path = "src/bin/maguro/main.rs"
+doc = false

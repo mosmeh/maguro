@@ -1,0 +1,15 @@
+[package]
+name = "ksw2"
+version = "0.1.0"
+authors = ["Yuta Imazu <yuta.imazu@gmail.com>"]
+edition = "2018"
+
+[build-dependencies]
+cc = "1.0.66"
+bindgen = "0.56.0"
+
+[dependencies]
+libc = "0.2.81"
+
+[lib]
+path = "src/lib.rs"
