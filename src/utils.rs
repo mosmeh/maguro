@@ -17,9 +17,32 @@ const ENCODE_TABLE: [u8; 256] = {
     table
 };
 
+const DECODE_TABLE: [u8; 256] = {
+    let mut table = [b'N'; 256];
+    table[1] = b'A';
+    table[2] = b'C';
+    table[3] = b'G';
+    table[4] = b'T';
+    table
+};
+
+pub fn encode_seq(seq: &[u8]) -> Vec<u8> {
+    seq.iter().map(|x| ENCODE_TABLE[*x as usize]).collect()
+}
+
 pub fn encode_seq_in_place(seq: &mut [u8]) {
     for x in seq.iter_mut() {
         *x = ENCODE_TABLE[*x as usize];
+    }
+}
+
+pub fn decode_seq(seq: &[u8]) -> Vec<u8> {
+    seq.iter().map(|x| DECODE_TABLE[*x as usize]).collect()
+}
+
+pub fn decode_seq_in_place(seq: &mut [u8]) {
+    for x in seq.iter_mut() {
+        *x = DECODE_TABLE[*x as usize];
     }
 }
 

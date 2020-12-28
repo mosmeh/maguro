@@ -13,12 +13,12 @@ pub const DELIMITER: u8 = b'$';
 
 #[derive(Serialize, Deserialize)]
 pub struct Index {
-    pub seq: Vec<u8>,
+    pub(crate) seq: Vec<u8>,
     ends: Vec<usize>,
     rank_dict: Rank9b,
     name_arena: Vec<u8>,
     name_ends: Vec<usize>,
-    pub sa: SuffixArray,
+    pub(crate) sa: SuffixArray,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -29,20 +29,27 @@ impl Index {
         self.ends.len() - 1
     }
 
-    pub fn seq_id_from_pos(&self, pos: usize) -> SequenceId {
-        if pos < self.ends[0] || self.seq.len() <= pos {
-            panic!("Out of bounds")
-        }
-
-        let rank = self.rank_dict.rank(pos as u64);
-        SequenceId(rank as usize - 1)
-    }
-
     pub fn seq_name(&self, seq_id: SequenceId) -> &[u8] {
         &self.name_arena[self.name_ends[seq_id.0]..self.name_ends[seq_id.0 + 1] - 1]
     }
 
-    pub fn seq_range(&self, seq_id: SequenceId) -> std::ops::Range<usize> {
+    pub fn seq(&self, seq_id: SequenceId) -> &[u8] {
+        &self.seq[self.seq_range(seq_id)]
+    }
+
+    pub(crate) fn seq_id_from_pos(&self, pos: usize) -> SequenceId {
+        assert!(self.ends[0] <= pos && pos < self.seq.len(), "Out of bounds");
+
+        let rank = self.rank_dict.rank(pos) as usize;
+        assert!(rank >= 1);
+
+        let seq_id = rank - 1;
+        assert!(seq_id < self.num_seqs());
+
+        SequenceId(seq_id)
+    }
+
+    pub(crate) fn seq_range(&self, seq_id: SequenceId) -> std::ops::Range<usize> {
         self.ends[seq_id.0]..(self.ends[seq_id.0 + 1] - 1)
     }
 }

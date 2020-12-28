@@ -10,8 +10,7 @@ pub struct Rank9b {
 }
 
 impl Rank9b {
-    pub fn from_vec(bits: Vec<u64>) -> Self {
-        let num_bits = bits.len();
+    pub fn from_vec(bits: Vec<u64>, num_bits: usize) -> Self {
         let num_words = (num_bits + 63) / 64;
         let num_counts = ((num_bits + 64 * 8 - 1) / (64 * 8)) * 2;
 
@@ -36,15 +35,13 @@ impl Rank9b {
         Self { bits, counts }
     }
 
-    pub fn from_bit_vec(mut bits: BitVec<Lsb0, u64>) -> Self {
-        if bits.len() < 64 * 3 {
-            bits.resize(64 * 3, false);
-        }
-        Self::from_vec(bits.into_vec())
+    pub fn from_bit_vec(bits: BitVec<Lsb0, u64>) -> Self {
+        let num_bits = bits.len();
+        Self::from_vec(bits.into_vec(), num_bits)
     }
 
-    pub fn rank(&self, k: u64) -> u64 {
-        let word = k as usize / 64;
+    pub fn rank(&self, k: usize) -> u64 {
+        let word = k / 64;
         let block = (word / 4) & !1;
         let offset = word % 8;
         self.counts[block]
