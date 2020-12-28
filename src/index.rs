@@ -1,7 +1,7 @@
 mod rank9b;
 mod suffix_array;
 
-use crate::utils;
+use crate::{alphabet, utils};
 use bio::io::fasta::{self, FastaRead};
 use bitvec::prelude::*;
 use rank9b::Rank9b;
@@ -56,6 +56,7 @@ impl Index {
 
 pub struct IndexBuilder<R: std::io::Read> {
     reader: fasta::Reader<R>,
+    bucket_width: usize,
     header_sep: Option<String>,
 }
 
@@ -69,6 +70,7 @@ impl<R: std::io::Read> IndexBuilder<R> {
     fn from_reader(reader: fasta::Reader<R>) -> Self {
         Self {
             reader,
+            bucket_width: 8,
             header_sep: None,
         }
     }
@@ -77,7 +79,12 @@ impl<R: std::io::Read> IndexBuilder<R> {
         Self::from_reader(fasta::Reader::new(reader))
     }
 
-    pub fn header_sep(&mut self, header_sep: String) -> &mut Self {
+    pub fn bucket_width(mut self, bucket_width: usize) -> Self {
+        self.bucket_width = bucket_width;
+        self
+    }
+
+    pub fn header_sep(mut self, header_sep: String) -> Self {
         self.header_sep = Some(header_sep);
         self
     }
@@ -108,7 +115,7 @@ impl<R: std::io::Read> IndexBuilder<R> {
                 .expect("Failed to parse record");
         }
 
-        utils::encode_seq_in_place(&mut seq);
+        alphabet::encode_seq_in_place(&mut seq);
 
         let mut bvec: BitVec<Lsb0, u64> = BitVec::new();
         bvec.resize(seq.len(), false);
@@ -116,7 +123,7 @@ impl<R: std::io::Read> IndexBuilder<R> {
             *bvec.get_mut(end - 1).unwrap() = true;
         }
 
-        let sa = SuffixArray::new(&seq);
+        let sa = SuffixArray::new(&seq, self.bucket_width);
         Index {
             seq,
             ends,

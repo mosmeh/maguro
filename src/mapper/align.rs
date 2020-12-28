@@ -1,4 +1,4 @@
-use crate::utils;
+use crate::alphabet::DUMMY_CODE;
 use ksw2::{ksw_extz, ksw_extz_t, ksw_gg2, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY};
 use std::ptr;
 use structopt::StructOpt;
@@ -34,7 +34,7 @@ pub struct Aligner {
 
 impl Aligner {
     pub fn new(config: AlignmentConfig) -> Self {
-        let n = utils::DUMMY_CODE as usize + 1;
+        let n = DUMMY_CODE as usize + 1;
         let mut score_matrix = vec![0; n * n];
         for i in 1..n - 1 {
             for j in 1..n - 1 {
@@ -103,7 +103,7 @@ impl Aligner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::utils;
+    use crate::alphabet;
 
     const MA: i32 = 2;
     const MP: i32 = -4;
@@ -119,15 +119,15 @@ mod tests {
     #[test]
     fn global_align() {
         let aligner = Aligner::new(CONFIG);
-        let target = utils::encode_seq(b"atcgggatatatggagagcttagag");
+        let target = alphabet::encode_seq(b"atcgggatatatggagagcttagag");
 
-        let query1 = utils::encode_seq(b"atcgggatatatggagagcttagag");
+        let query1 = alphabet::encode_seq(b"atcgggatatatggagagcttagag");
         assert_eq!(
             aligner.global_align(&query1, &target),
             MA * query1.len() as i32
         );
 
-        let query2 = utils::encode_seq(b"atcgggatata");
+        let query2 = alphabet::encode_seq(b"atcgggatata");
         assert_eq!(
             aligner.global_align(&query2, &target),
             MA * query2.len() as i32 - GO - GE * (target.len() - query2.len()) as i32
@@ -137,8 +137,8 @@ mod tests {
     #[test]
     fn extension_align() {
         let aligner = Aligner::new(CONFIG);
-        let target = utils::encode_seq(b"atcgggatatatggagagcttagag");
-        let query = utils::encode_seq(b"atcgggatata");
+        let target = alphabet::encode_seq(b"atcgggatatatggagagcttagag");
+        let query = alphabet::encode_seq(b"atcgggatata");
         assert_eq!(
             aligner.extension_align(&query, &target),
             MA * query.len() as i32,

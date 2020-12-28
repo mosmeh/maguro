@@ -1,6 +1,7 @@
 use super::Command;
 use bio::io::fasta::{self, FastaRead};
 use maguro::{
+    alphabet,
     index::Index,
     mapper::{align::AlignmentConfig, MapperBuilder},
     sam::SamWriter,
@@ -63,7 +64,7 @@ impl Command for MapCommand {
             record.check().expect("Invalid record");
 
             let qname = utils::extract_byte_name(record.id(), &self.header_sep);
-            let query = utils::encode_seq(&record.seq());
+            let query = alphabet::encode_seq(&record.seq());
 
             let mappings = mapper.map(&query);
             if mappings.is_empty() {

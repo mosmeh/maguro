@@ -197,37 +197,37 @@ impl<'a> MapperBuilder<'a> {
         }
     }
 
-    pub fn k(mut self, k: usize) -> Self {
+    pub fn k(&mut self, k: usize) -> &mut Self {
         self.k = k;
         self
     }
 
-    pub fn consensus_fraction(mut self, consensus_fraction: f64) -> Self {
+    pub fn consensus_fraction(&mut self, consensus_fraction: f64) -> &mut Self {
         self.consensus_fraction = consensus_fraction;
         self
     }
 
-    pub fn coverage_score_ratio(mut self, coverage_score_ratio: f64) -> Self {
+    pub fn coverage_score_ratio(&mut self, coverage_score_ratio: f64) -> &mut Self {
         self.coverage_score_ratio = coverage_score_ratio;
         self
     }
 
-    pub fn max_splice_gap(mut self, max_splice_gap: usize) -> Self {
+    pub fn max_splice_gap(&mut self, max_splice_gap: usize) -> &mut Self {
         self.max_splice_gap = max_splice_gap;
         self
     }
 
-    pub fn min_score_fraction(mut self, min_score_fraction: f64) -> Self {
+    pub fn min_score_fraction(&mut self, min_score_fraction: f64) -> &mut Self {
         self.min_score_fraction = min_score_fraction;
         self
     }
 
-    pub fn alignment_config(mut self, alignment_config: AlignmentConfig) -> Self {
+    pub fn alignment_config(&mut self, alignment_config: AlignmentConfig) -> &mut Self {
         self.alignment_config = alignment_config;
         self
     }
 
-    pub fn build(self) -> Mapper<'a> {
+    pub fn build(&self) -> Mapper<'a> {
         Mapper {
             index: self.index,
             k: self.k,
@@ -235,7 +235,7 @@ impl<'a> MapperBuilder<'a> {
             coverage_score_ratio: self.coverage_score_ratio,
             max_splice_gap: self.max_splice_gap,
             min_score_fraction: self.min_score_fraction,
-            aligner: Aligner::new(self.alignment_config),
+            aligner: Aligner::new(self.alignment_config.clone()),
         }
     }
 }
@@ -243,7 +243,7 @@ impl<'a> MapperBuilder<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{index::IndexBuilder, utils};
+    use crate::{alphabet, index::IndexBuilder};
     use itertools::Itertools;
 
     fn check_map(seqs: &[(&[u8], &[u8])], query: &[u8], expected: &[&[u8]]) {
@@ -263,7 +263,7 @@ mod tests {
             .min_score_fraction(0.3)
             .build();
 
-        let query = utils::encode_seq(&query);
+        let query = alphabet::encode_seq(&query);
 
         let got: Vec<_> = mapper
             .map(&query)
