@@ -1,17 +1,17 @@
 use crate::sequence::DUMMY_CODE;
-use ksw2::{ksw_extz, ksw_extz_t, ksw_gg2, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY};
-use std::ptr;
+use ksw2::{km_destroy, km_init, ksw_extz, ksw_extz_t, ksw_gg2, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY};
+use std::{ffi::c_void, ptr};
 use structopt::StructOpt;
 
-#[derive(Clone, StructOpt)]
+#[derive(Clone, Debug, StructOpt)]
 pub struct AlignmentConfig {
-    #[structopt(long = "ma", default_value)]
+    #[structopt(long = "ma", default_value = "2")]
     pub match_score: i8,
-    #[structopt(long = "mp", default_value)]
+    #[structopt(long = "mp", default_value = "-4")]
     pub mismatch_score: i8,
-    #[structopt(long = "go", default_value)]
+    #[structopt(long = "go", default_value = "5")]
     pub gap_open_penalty: i8,
-    #[structopt(long = "ge", default_value)]
+    #[structopt(long = "ge", default_value = "3")]
     pub gap_extend_penalty: i8,
 }
 
@@ -30,6 +30,16 @@ pub struct Aligner {
     config: AlignmentConfig,
     sequence_size: i8,
     score_matrix: Vec<i8>,
+    ez: ksw_extz_t,
+    km: *mut c_void,
+}
+
+impl Drop for Aligner {
+    fn drop(&mut self) {
+        unsafe {
+            km_destroy(self.km);
+        }
+    }
 }
 
 impl Aligner {
@@ -50,6 +60,8 @@ impl Aligner {
             config,
             sequence_size: n as i8,
             score_matrix,
+            ez: unsafe { std::mem::zeroed() },
+            km: unsafe { km_init() },
         }
     }
 
@@ -58,9 +70,13 @@ impl Aligner {
     }
 
     pub fn global_align(&self, query: &[u8], target: &[u8]) -> i32 {
+        self.banded_global_align(query, target, -1)
+    }
+
+    pub fn banded_global_align(&self, query: &[u8], target: &[u8], bandwidth: i32) -> i32 {
         unsafe {
             ksw_gg2(
-                ptr::null_mut(),
+                self.km,
                 query.len() as i32,
                 query.as_ptr(),
                 target.len() as i32,
@@ -69,7 +85,7 @@ impl Aligner {
                 self.score_matrix.as_ptr(),
                 self.config.gap_open_penalty,
                 self.config.gap_extend_penalty,
-                -1,
+                calc_bandwidth(query, target, bandwidth),
                 ptr::null_mut(),
                 ptr::null_mut(),
                 ptr::null_mut(),
@@ -77,11 +93,14 @@ impl Aligner {
         }
     }
 
-    pub fn extension_align(&self, query: &[u8], target: &[u8]) -> i32 {
-        let mut ez: ksw_extz_t = unsafe { std::mem::zeroed() };
+    pub fn extension_align(&mut self, query: &[u8], target: &[u8]) -> i32 {
+        self.banded_extension_align(query, target, -1)
+    }
+
+    pub fn banded_extension_align(&mut self, query: &[u8], target: &[u8], bandwidth: i32) -> i32 {
         unsafe {
             ksw_extz(
-                ptr::null_mut(),
+                self.km,
                 query.len() as i32,
                 query.as_ptr(),
                 target.len() as i32,
@@ -90,13 +109,25 @@ impl Aligner {
                 self.score_matrix.as_ptr(),
                 self.config.gap_open_penalty,
                 self.config.gap_extend_penalty,
-                -1,
+                calc_bandwidth(query, target, bandwidth),
                 -1,
                 (KSW_EZ_SCORE_ONLY | KSW_EZ_RIGHT) as i32,
-                &mut ez,
+                &mut self.ez,
             );
         }
-        ez.mqe
+        self.ez.mqe
+    }
+}
+
+fn calc_bandwidth(query: &[u8], target: &[u8], bandwidth: i32) -> i32 {
+    let max_bandwidth = query.len().max(target.len()) as i32;
+    if bandwidth < 0 {
+        max_bandwidth
+    } else {
+        bandwidth
+            .min(max_bandwidth)
+            .max((query.len() as i32 - target.len() as i32).abs() - 1)
+        // see https://github.com/lh3/ksw2/issues/16
     }
 }
 
@@ -136,7 +167,7 @@ mod tests {
 
     #[test]
     fn extension_align() {
-        let aligner = Aligner::new(CONFIG);
+        let mut aligner = Aligner::new(CONFIG);
         let target = sequence::encode(b"atcgggatatatggagagcttagag");
         let query = sequence::encode(b"atcgggatata");
         assert_eq!(

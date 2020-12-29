@@ -13,7 +13,7 @@ use std::{
 };
 use structopt::StructOpt;
 
-#[derive(StructOpt)]
+#[derive(StructOpt, Debug)]
 pub struct MapCommand {
     #[structopt(short, long)]
     index: PathBuf,
@@ -41,7 +41,7 @@ impl Command for MapCommand {
             let reader = BufReader::new(File::open(self.index)?);
             bincode::deserialize_from(reader)?
         };
-        let mapper = MapperBuilder::new(&index)
+        let mut mapper = MapperBuilder::new(&index)
             .k(self.k)
             .consensus_fraction(self.consensus_fraction)
             .coverage_score_ratio(self.coverage_score_ratio)

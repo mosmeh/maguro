@@ -10,7 +10,7 @@ pub struct Chain {
 pub fn chain_anchors(
     mut anchors: Vec<Anchor>,
     max_splice_gap: usize,
-    min_accepted_score: f64,
+    score_threshold: f64,
 ) -> Vec<Chain> {
     anchors.sort_by(|a, b| {
         (a.ref_pos + a.len)
@@ -64,7 +64,7 @@ pub fn chain_anchors(
         }
     }
 
-    if best_score < min_accepted_score {
+    if best_score < score_threshold {
         return Vec::new();
     }
 
@@ -73,7 +73,7 @@ pub fn chain_anchors(
         .iter()
         .filter_map(|end| {
             let score = f[*end];
-            if score < min_accepted_score {
+            if score < score_threshold {
                 return None;
             }
 
