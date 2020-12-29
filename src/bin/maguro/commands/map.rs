@@ -1,11 +1,10 @@
 use super::Command;
 use bio::io::fasta::{self, FastaRead};
 use maguro::{
-    alphabet,
     index::Index,
     mapper::{align::AlignmentConfig, MapperBuilder},
     sam::SamWriter,
-    utils,
+    sequence, utils,
 };
 use std::{
     fs::File,
@@ -56,28 +55,37 @@ impl Command for MapCommand {
         let mut sam_writer = SamWriter::new(out);
         sam_writer.write_header(&index)?;
 
-        let mut reader = fasta::Reader::from_file(self.read).expect("Failed to open FASTA file");
+        let mut reader = fasta::Reader::from_file(self.read)?;
         let mut record = fasta::Record::new();
-        reader.read(&mut record).expect("Failed to parse record");
+        reader.read(&mut record)?;
 
         while !record.is_empty() {
-            record.check().expect("Invalid record");
+            record.check().map_err(|e| anyhow::anyhow!(e.to_owned()))?;
 
             let qname = utils::extract_byte_name(record.id(), &self.header_sep);
-            let query = alphabet::encode_seq(&record.seq());
+            let query = sequence::encode(&record.seq());
 
             let mappings = mapper.map(&query);
             if mappings.is_empty() {
                 sam_writer.write_unmapped(qname, record.seq())?;
             } else {
                 let mut secondary = false;
+                let mut rc_query_cache = None;
+
                 for mapping in mappings {
-                    sam_writer.write_mapping(&index, qname, &record.seq(), &mapping, secondary)?;
+                    sam_writer.write_mapping(
+                        &index,
+                        qname,
+                        &record.seq(),
+                        &mapping,
+                        secondary,
+                        &mut rc_query_cache,
+                    )?;
                     secondary = true;
                 }
             }
 
-            reader.read(&mut record).expect("Failed to parse record");
+            reader.read(&mut record)?;
         }
 
         Ok(())

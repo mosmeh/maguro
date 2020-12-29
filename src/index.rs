@@ -1,12 +1,12 @@
 mod rank9b;
 mod suffix_array;
 
-use crate::{alphabet, utils};
+use crate::{sequence, utils};
 use bio::io::fasta::{self, FastaRead};
 use bitvec::prelude::*;
 use rank9b::Rank9b;
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::{io, path::Path};
 use suffix_array::SuffixArray;
 
 pub const DELIMITER: u8 = b'$';
@@ -54,19 +54,19 @@ impl Index {
     }
 }
 
-pub struct IndexBuilder<R: std::io::Read> {
+pub struct IndexBuilder<R: io::Read> {
     reader: fasta::Reader<R>,
     bucket_width: usize,
     header_sep: Option<String>,
 }
 
 impl IndexBuilder<std::fs::File> {
-    pub fn from_file<P: AsRef<Path>>(path: P) -> Self {
-        Self::from_reader(fasta::Reader::from_file(path).expect("Failed to open FASTA file"))
+    pub fn from_file<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+        Ok(Self::from_reader(fasta::Reader::from_file(path)?))
     }
 }
 
-impl<R: std::io::Read> IndexBuilder<R> {
+impl<R: io::Read> IndexBuilder<R> {
     fn from_reader(reader: fasta::Reader<R>) -> Self {
         Self {
             reader,
@@ -89,18 +89,16 @@ impl<R: std::io::Read> IndexBuilder<R> {
         self
     }
 
-    pub fn build(mut self) -> Index {
+    pub fn build(mut self) -> io::Result<Index> {
         let mut seq = vec![DELIMITER];
         let mut ends = vec![1];
         let mut name_arena = Vec::new();
         let mut name_ends = vec![0];
 
         let mut record = fasta::Record::new();
-        self.reader
-            .read(&mut record)
-            .expect("Failed to parse record");
+        self.reader.read(&mut record)?;
         while !record.is_empty() {
-            record.check().expect("Invalid record");
+            record.check().unwrap();
 
             seq.extend_from_slice(record.seq());
             seq.push(DELIMITER);
@@ -110,12 +108,10 @@ impl<R: std::io::Read> IndexBuilder<R> {
             name_arena.push(b'\n');
             name_ends.push(name_arena.len());
 
-            self.reader
-                .read(&mut record)
-                .expect("Failed to parse record");
+            self.reader.read(&mut record)?;
         }
 
-        alphabet::encode_seq_in_place(&mut seq);
+        sequence::encode_in_place(&mut seq);
 
         let mut bvec: BitVec<Lsb0, u64> = BitVec::new();
         bvec.resize(seq.len(), false);
@@ -124,14 +120,14 @@ impl<R: std::io::Read> IndexBuilder<R> {
         }
 
         let sa = SuffixArray::new(&seq, self.bucket_width);
-        Index {
+        Ok(Index {
             seq,
             ends,
             rank_dict: Rank9b::from_bit_vec(bvec),
             name_arena,
             name_ends,
             sa,
-        }
+        })
     }
 }
 
@@ -148,7 +144,7 @@ mod tests {
         }
 
         let cursor = std::io::Cursor::new(&fasta);
-        let index = IndexBuilder::new(cursor).build();
+        let index = IndexBuilder::new(cursor).build().unwrap();
 
         let got: Vec<_> = pos
             .iter()

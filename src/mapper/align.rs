@@ -1,4 +1,4 @@
-use crate::alphabet::DUMMY_CODE;
+use crate::sequence::DUMMY_CODE;
 use ksw2::{ksw_extz, ksw_extz_t, ksw_gg2, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY};
 use std::ptr;
 use structopt::StructOpt;
@@ -28,7 +28,7 @@ impl Default for AlignmentConfig {
 
 pub struct Aligner {
     config: AlignmentConfig,
-    alphabet_size: i8,
+    sequence_size: i8,
     score_matrix: Vec<i8>,
 }
 
@@ -48,7 +48,7 @@ impl Aligner {
 
         Self {
             config,
-            alphabet_size: n as i8,
+            sequence_size: n as i8,
             score_matrix,
         }
     }
@@ -65,7 +65,7 @@ impl Aligner {
                 query.as_ptr(),
                 target.len() as i32,
                 target.as_ptr(),
-                self.alphabet_size,
+                self.sequence_size,
                 self.score_matrix.as_ptr(),
                 self.config.gap_open_penalty,
                 self.config.gap_extend_penalty,
@@ -86,7 +86,7 @@ impl Aligner {
                 query.as_ptr(),
                 target.len() as i32,
                 target.as_ptr(),
-                self.alphabet_size,
+                self.sequence_size,
                 self.score_matrix.as_ptr(),
                 self.config.gap_open_penalty,
                 self.config.gap_extend_penalty,
@@ -103,7 +103,7 @@ impl Aligner {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::alphabet;
+    use crate::sequence;
 
     const MA: i32 = 2;
     const MP: i32 = -4;
@@ -119,15 +119,15 @@ mod tests {
     #[test]
     fn global_align() {
         let aligner = Aligner::new(CONFIG);
-        let target = alphabet::encode_seq(b"atcgggatatatggagagcttagag");
+        let target = sequence::encode(b"atcgggatatatggagagcttagag");
 
-        let query1 = alphabet::encode_seq(b"atcgggatatatggagagcttagag");
+        let query1 = sequence::encode(b"atcgggatatatggagagcttagag");
         assert_eq!(
             aligner.global_align(&query1, &target),
             MA * query1.len() as i32
         );
 
-        let query2 = alphabet::encode_seq(b"atcgggatata");
+        let query2 = sequence::encode(b"atcgggatata");
         assert_eq!(
             aligner.global_align(&query2, &target),
             MA * query2.len() as i32 - GO - GE * (target.len() - query2.len()) as i32
@@ -137,8 +137,8 @@ mod tests {
     #[test]
     fn extension_align() {
         let aligner = Aligner::new(CONFIG);
-        let target = alphabet::encode_seq(b"atcgggatatatggagagcttagag");
-        let query = alphabet::encode_seq(b"atcgggatata");
+        let target = sequence::encode(b"atcgggatatatggagagcttagag");
+        let query = sequence::encode(b"atcgggatata");
         assert_eq!(
             aligner.extension_align(&query, &target),
             MA * query.len() as i32,

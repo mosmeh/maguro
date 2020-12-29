@@ -13,7 +13,7 @@ pub struct IndexCommand {
     reference: PathBuf,
     #[structopt(short, long)]
     output: PathBuf,
-    #[structopt(short, long, default_value = "8")]
+    #[structopt(short, long, default_value = "10")]
     bucket_width: usize,
     #[structopt(long)]
     header_sep: Option<String>,
@@ -21,12 +21,12 @@ pub struct IndexCommand {
 
 impl Command for IndexCommand {
     fn run(self) -> anyhow::Result<()> {
-        let mut builder = IndexBuilder::from_file(self.reference).bucket_width(self.bucket_width);
+        let mut builder = IndexBuilder::from_file(self.reference)?.bucket_width(self.bucket_width);
         if let Some(value) = self.header_sep {
             builder = builder.header_sep(value);
         }
 
-        let index = builder.build();
+        let index = builder.build()?;
 
         let mut writer = BufWriter::new(File::create(&self.output)?);
         bincode::serialize_into(&mut writer, &index)?;

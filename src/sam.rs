@@ -1,6 +1,7 @@
 use crate::{
     index::{Index, SequenceId},
     mapper::Mapping,
+    sequence,
 };
 use std::io;
 
@@ -41,9 +42,26 @@ impl<W: io::Write> SamWriter<W> {
         seq: &[u8],
         mapping: &Mapping,
         secondary: bool,
+        rc_seq_cache: &mut Option<Vec<u8>>,
     ) -> io::Result<()> {
-        let flag = if secondary { 0x100 } else { 0 };
         let rname = index.seq_name(mapping.seq_id);
+
+        let mut flag = 0;
+        if mapping.strand.is_reverse() {
+            flag |= 0x10;
+        }
+        if secondary {
+            flag |= 0x100;
+        }
+
+        let seq: &[u8] = if mapping.strand.is_forward() {
+            seq
+        } else if let Some(rc) = rc_seq_cache {
+            rc
+        } else {
+            *rc_seq_cache = Some(sequence::reverse_complement(seq));
+            &rc_seq_cache.as_ref().unwrap()
+        };
 
         self.out.write_all(qname)?;
         write!(self.out, "\t{}\t", flag)?;
@@ -55,7 +73,7 @@ impl<W: io::Write> SamWriter<W> {
             seq.len(),
             seq.len()
         )?;
-        self.out.write_all(&seq)?;
+        self.out.write_all(seq)?;
         self.out.write_all(b"\t*\n")
     }
 

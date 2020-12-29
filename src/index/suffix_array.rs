@@ -1,4 +1,4 @@
-use crate::alphabet;
+use crate::sequence;
 use bio::data_structures::suffix_array::suffix_array;
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
@@ -25,7 +25,7 @@ impl SuffixArray {
 
         for i in 0..bucket_len {
             for (bit, x) in prefix.iter_mut().enumerate() {
-                *x = alphabet::two_bit_to_code((i >> (2 * bit)) as u8);
+                *x = sequence::two_bit_to_code((i >> (2 * bit)) as u8);
             }
             buckets.push(
                 search_suffix_array(&array, &child, text, &prefix, 0, 0, text.len(), 0)
@@ -48,7 +48,7 @@ impl SuffixArray {
 
         let mut idx = 0;
         for (i, x) in query[..self.bucket_width].iter().enumerate() {
-            idx |= (alphabet::code_to_two_bit(*x) as usize) << (2 * i);
+            idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * i);
         }
 
         let range = &self.buckets[idx];
@@ -176,12 +176,12 @@ fn make_child_table(lcp: &[usize]) -> Vec<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::alphabet;
+    use crate::sequence;
     use itertools::Itertools;
 
     fn check_search(text: &[u8], query: &[u8], expected: Option<&[usize]>) {
-        let text = alphabet::encode_seq(text);
-        let query = alphabet::encode_seq(query);
+        let text = sequence::encode(text);
+        let query = sequence::encode(query);
         let sa = SuffixArray::new(&text, 2);
         let got: Option<Vec<usize>> = sa
             .search(&text, &query)
