@@ -38,7 +38,7 @@ pub struct Mapping {
     pub seq_id: SequenceId,
     pub pos: usize,
     pub strand: Strand,
-    score: i32,
+    pub score: i32,
 }
 
 pub struct Mapper<'a> {
@@ -191,7 +191,8 @@ impl Mapper<'_> {
         score_threshold: i32,
     ) -> Option<Mapping> {
         let seq_range = self.index.seq_range(seq_id);
-        let rev_seq = sequence::reverse(&self.index.seq[seq_range.start..seq_range.end]);
+        let seq = &self.index.seq[seq_range.clone()];
+        let rev_seq = sequence::reverse(seq);
 
         let align_config = self.aligner.config();
         let match_score = align_config.match_score as i32;
@@ -234,38 +235,52 @@ impl Mapper<'_> {
 
             let first_anchor = &anchors[0];
             let last_anchor = &anchors[anchors.len() - 1];
-            let query_anchor_range =
-                first_anchor.query_pos..(last_anchor.query_pos + last_anchor.len);
-            let ref_anchor_range = first_anchor.ref_pos..(last_anchor.ref_pos + last_anchor.len);
+
+            let query_anchor_start = first_anchor.query_pos;
+            let query_anchor_end = last_anchor.query_pos + last_anchor.len;
+
+            let ref_anchor_start = first_anchor.ref_pos;
+            let ref_anchor_end = last_anchor.ref_pos + last_anchor.len;
 
             // left extension
-            if query_anchor_range.start > 0 {
-                let target = if ref_anchor_range.start > seq_range.start {
-                    &rev_seq[rev_seq.len() - (ref_anchor_range.start - seq_range.start) + 1..]
+            if query_anchor_start > 0 {
+                let bandwidth = calc_bandwidth(remaining_len, score, best_score);
+                let target = if ref_anchor_start > seq_range.start {
+                    &rev_seq[rev_seq.len() - (ref_anchor_start - seq_range.start) + 1..]
                 } else {
                     &[]
                 };
+
                 score += self.aligner.banded_extension_align(
-                    &rev_query[rev_query.len() - query_anchor_range.start + 1..],
-                    target,
-                    calc_bandwidth(remaining_len, score, best_score),
+                    &rev_query[rev_query.len() - query_anchor_start + 1..],
+                    &target[..target.len().min(query_anchor_start + bandwidth as usize)],
+                    bandwidth,
                 );
 
-                remaining_len -= query_anchor_range.start;
+                remaining_len -= query_anchor_start;
                 if score + match_score * remaining_len as i32 <= best_score {
                     continue;
                 }
             }
 
             // right extension
-            if query_anchor_range.end < query.len() {
+            if query_anchor_end < query.len() {
+                let bandwidth = calc_bandwidth(remaining_len, score, best_score);
+                let target = if ref_anchor_end < seq_range.end {
+                    &seq[ref_anchor_end - seq_range.start..]
+                } else {
+                    &[]
+                };
+
                 score += self.aligner.banded_extension_align(
-                    &query[query_anchor_range.end..],
-                    &self.index.seq[ref_anchor_range.end..seq_range.end],
-                    calc_bandwidth(remaining_len, score, best_score),
+                    &query[query_anchor_end..],
+                    &target[..target
+                        .len()
+                        .min(query.len() - query_anchor_end + bandwidth as usize)],
+                    bandwidth,
                 );
 
-                remaining_len -= query.len() - query_anchor_range.end;
+                remaining_len -= query.len() - query_anchor_end;
             }
 
             assert_eq!(remaining_len, 0);
@@ -273,8 +288,7 @@ impl Mapper<'_> {
             if score > best_score {
                 best_mapping = Some(Mapping {
                     seq_id,
-                    pos: (ref_anchor_range.start - seq_range.start)
-                        .saturating_sub(query_anchor_range.start),
+                    pos: (ref_anchor_start - seq_range.start).saturating_sub(query_anchor_start),
                     strand,
                     score,
                 });

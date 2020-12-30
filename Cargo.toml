@@ -22,6 +22,3 @@ path = "src/lib.rs"
 name = "maguro"
 path = "src/bin/maguro/main.rs"
 doc = false
-
-[profile.release]
-debug = true

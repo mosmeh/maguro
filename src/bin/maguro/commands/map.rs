@@ -65,10 +65,12 @@ impl Command for MapCommand {
             let qname = utils::extract_byte_name(record.id(), &self.header_sep);
             let query = sequence::encode(&record.seq());
 
-            let mappings = mapper.map(&query);
+            let mut mappings = mapper.map(&query);
             if mappings.is_empty() {
                 sam_writer.write_unmapped(qname, record.seq())?;
             } else {
+                mappings.sort_by(|a, b| b.score.cmp(&a.score));
+
                 let mut secondary = false;
                 let mut rc_query_cache = None;
 
