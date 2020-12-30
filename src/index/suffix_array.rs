@@ -13,7 +13,7 @@ pub struct SuffixArray {
 
 impl SuffixArray {
     pub fn new(text: &[u8], bucket_width: usize) -> Self {
-        assert!(bucket_width * 2 <= std::mem::size_of::<usize>() * 8);
+        assert!(bucket_width * 2 < std::mem::size_of::<usize>() * 8);
 
         let array = suffix_array(text);
         let lcp = make_lcp_array(text, &array);

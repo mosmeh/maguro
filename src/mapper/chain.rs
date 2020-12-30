@@ -7,6 +7,7 @@ pub struct Chain {
     pub anchors: Vec<Anchor>,
 }
 
+/// Finds optimal chains based on minimap2's formulation.
 pub fn chain_anchors(
     mut anchors: Vec<Anchor>,
     max_splice_gap: usize,
@@ -68,38 +69,46 @@ pub fn chain_anchors(
         return Vec::new();
     }
 
+    // backtracking
+
     let mut used = vec![false; anchors.len()];
     best_chain_ends
-        .iter()
+        .into_iter()
+        .filter(|end| f[*end] >= score_threshold)
+        .sorted_by(|a, b| f[*b].partial_cmp(&f[*a]).unwrap())
         .filter_map(|end| {
-            let score = f[*end];
-            if score < score_threshold {
+            if used[end] {
                 return None;
             }
 
-            let mut ptr = ptrs[*end];
-            let mut last_ptr = *end;
+            let mut next = ptrs[end];
+            let mut curr = end;
             let mut anchor_indices = Vec::new();
-            let mut overlap = false;
 
-            while ptr < last_ptr {
-                if used[last_ptr] {
-                    overlap = true;
+            while next < curr {
+                if used[curr] {
+                    break;
                 }
-                anchor_indices.push(last_ptr);
-                used[last_ptr] = true;
-                last_ptr = ptr;
-                ptr = ptrs[ptr];
+                anchor_indices.push(curr);
+                used[curr] = true;
+                curr = next;
+                next = ptrs[next];
             }
-            if used[last_ptr] || overlap {
-                return None;
+            if !used[curr] {
+                assert_eq!(curr, next);
+                anchor_indices.push(curr);
             }
-            anchor_indices.push(last_ptr);
 
-            let anchors = anchor_indices.iter().rev().map(|i| anchors[*i].clone());
-            let anchors = coalesce_anchors(anchors).collect();
+            let anchors = anchor_indices
+                .iter()
+                .rev()
+                .map(|i| anchors[*i].clone())
+                .collect();
 
-            Some(Chain { score, anchors })
+            Some(Chain {
+                score: f[end],
+                anchors,
+            })
         })
         .collect()
 }

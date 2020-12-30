@@ -207,7 +207,7 @@ impl Mapper<'_> {
         };
 
         let mut best_mapping = None;
-        let mut best_score = score_threshold;
+        let mut best_score = score_threshold - 1;
 
         'chain_loop: for chain in chains {
             let anchors = &chain.anchors;
