@@ -43,7 +43,8 @@ pub struct Mapping {
 
 pub struct Mapper<'a> {
     index: &'a Index,
-    k: usize,
+    seed_min_len: usize,
+    seed_max_hits: usize,
     consensus_fraction: f64,
     coverage_score_ratio: f64,
     max_splice_gap: usize,
@@ -53,7 +54,7 @@ pub struct Mapper<'a> {
 
 impl Mapper<'_> {
     pub fn map(&mut self, query: &[u8]) -> Vec<Mapping> {
-        assert!(query.len() >= self.k);
+        assert!(query.len() >= self.seed_min_len);
 
         let rc_query = sequence::reverse_complement(&query);
 
@@ -144,12 +145,14 @@ impl Mapper<'_> {
         let mut ref_to_anchors: HashMap<(SequenceId, Strand), Vec<Anchor>> = HashMap::new();
 
         let mut seed = |query: &[u8], strand| {
-            for seed_pos in 0..=(query.len() - self.k) {
-                let range = self
-                    .index
-                    .sa
-                    .search(&self.index.seq, &query[seed_pos..seed_pos + self.k]);
-                if let Some(range) = range {
+            for seed_pos in 0..=(query.len() - self.seed_min_len) {
+                let result = self.index.sa.extension_search(
+                    &self.index.seq,
+                    &query[seed_pos..],
+                    self.seed_min_len,
+                    self.seed_max_hits,
+                );
+                if let Some((range, len)) = result {
                     for i in range {
                         let pos = self.index.sa.array[i];
                         let id = self.index.seq_id_from_pos(pos);
@@ -160,14 +163,14 @@ impl Mapper<'_> {
                                 anchors.push(Anchor {
                                     query_pos: seed_pos,
                                     ref_pos: pos,
-                                    len: self.k,
+                                    len,
                                 })
                             })
                             .or_insert_with(|| {
                                 vec![Anchor {
                                     query_pos: seed_pos,
                                     ref_pos: pos,
-                                    len: self.k,
+                                    len,
                                 }]
                             });
                     }
@@ -302,7 +305,8 @@ impl Mapper<'_> {
 
 pub struct MapperBuilder<'a> {
     index: &'a Index,
-    k: usize,
+    seed_min_len: usize,
+    seed_max_hits: usize,
     consensus_fraction: f64,
     coverage_score_ratio: f64,
     max_splice_gap: usize,
@@ -314,7 +318,8 @@ impl<'a> MapperBuilder<'a> {
     pub fn new(index: &'a Index) -> Self {
         Self {
             index,
-            k: 15,
+            seed_min_len: 31,
+            seed_max_hits: 10,
             consensus_fraction: 0.65,
             coverage_score_ratio: 0.6,
             max_splice_gap: 100,
@@ -323,8 +328,13 @@ impl<'a> MapperBuilder<'a> {
         }
     }
 
-    pub fn k(&mut self, k: usize) -> &mut Self {
-        self.k = k;
+    pub fn seed_min_len(&mut self, seed_min_len: usize) -> &mut Self {
+        self.seed_min_len = seed_min_len;
+        self
+    }
+
+    pub fn seed_max_hits(&mut self, seed_max_hits: usize) -> &mut Self {
+        self.seed_max_hits = seed_max_hits;
         self
     }
 
@@ -356,7 +366,8 @@ impl<'a> MapperBuilder<'a> {
     pub fn build(&self) -> Mapper<'a> {
         Mapper {
             index: self.index,
-            k: self.k,
+            seed_min_len: self.seed_min_len,
+            seed_max_hits: self.seed_max_hits,
             consensus_fraction: self.consensus_fraction,
             coverage_score_ratio: self.coverage_score_ratio,
             max_splice_gap: self.max_splice_gap,
@@ -385,7 +396,7 @@ mod tests {
         let cursor = std::io::Cursor::new(&fasta);
         let index = IndexBuilder::new(cursor).build().unwrap();
         let mut mapper = MapperBuilder::new(&index)
-            .k(3)
+            .seed_min_len(3)
             .min_score_fraction(0.25)
             .build();
 

@@ -19,8 +19,10 @@ pub struct MapCommand {
     index: PathBuf,
     #[structopt(short, long)]
     read: PathBuf,
-    #[structopt(short, default_value = "31")]
-    k: usize,
+    #[structopt(short = "k", long, default_value = "31")]
+    seed_min_len: usize,
+    #[structopt(short, default_value = "10")]
+    multiplicity: usize,
     #[structopt(long, default_value = "0.65")]
     consensus_fraction: f64,
     #[structopt(long, default_value = "0.6")]
@@ -42,7 +44,8 @@ impl Command for MapCommand {
             bincode::deserialize_from(reader)?
         };
         let mut mapper = MapperBuilder::new(&index)
-            .k(self.k)
+            .seed_min_len(self.seed_min_len)
+            .seed_max_hits(self.multiplicity)
             .consensus_fraction(self.consensus_fraction)
             .coverage_score_ratio(self.coverage_score_ratio)
             .max_splice_gap(self.max_splice_gap)

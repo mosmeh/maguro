@@ -1,5 +1,5 @@
-mod rank9b;
-mod suffix_array;
+pub mod rank9b;
+pub mod suffix_array;
 
 use crate::{sequence, utils};
 use bio::io::fasta::{self, FastaRead};
