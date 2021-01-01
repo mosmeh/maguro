@@ -3,8 +3,7 @@ use bio::io::fasta::{self, FastaRead};
 use maguro::{
     index::Index,
     mapper::{align::AlignmentConfig, MapperBuilder},
-    sam::SamWriter,
-    sequence, utils,
+    sam, sequence, utils,
 };
 use std::{
     fs::File,
@@ -54,23 +53,24 @@ impl Command for MapCommand {
             .build();
 
         let out = std::io::stdout();
-        let out = BufWriter::new(out.lock());
-        let mut sam_writer = SamWriter::new(out);
-        sam_writer.write_header(&index)?;
+        let mut out = BufWriter::new(out.lock());
+        sam::write_header(&mut out, &index)?;
 
         let mut reader = fasta::Reader::from_file(self.read)?;
         let mut record = fasta::Record::new();
         reader.read(&mut record)?;
 
+        let start = std::time::Instant::now();
+
         while !record.is_empty() {
             record.check().map_err(|e| anyhow::anyhow!(e.to_owned()))?;
 
-            let qname = utils::extract_byte_name(record.id(), &self.header_sep);
+            let qname = utils::extract_name_bytes(record.id(), &self.header_sep);
             let query = sequence::encode(&record.seq());
 
             let mut mappings = mapper.map(&query);
             if mappings.is_empty() {
-                sam_writer.write_unmapped(qname, record.seq())?;
+                sam::write_unmapped(&mut out, qname, record.seq())?;
             } else {
                 mappings.sort_by(|a, b| b.score.cmp(&a.score));
 
@@ -78,7 +78,8 @@ impl Command for MapCommand {
                 let mut rc_query_cache = None;
 
                 for mapping in mappings {
-                    sam_writer.write_mapping(
+                    sam::write_mapping(
+                        &mut out,
                         &index,
                         qname,
                         &record.seq(),
@@ -92,6 +93,8 @@ impl Command for MapCommand {
 
             reader.read(&mut record)?;
         }
+
+        eprintln!("{}ms", start.elapsed().as_millis());
 
         Ok(())
     }

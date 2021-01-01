@@ -13,9 +13,11 @@ pub const DELIMITER: u8 = b'$';
 
 #[derive(Serialize, Deserialize)]
 pub struct Index {
+    #[serde(with = "serde_bytes")]
     pub(crate) seq: Vec<u8>,
     ends: Vec<usize>,
     rank_dict: Rank9b,
+    #[serde(with = "serde_bytes")]
     name_arena: Vec<u8>,
     name_ends: Vec<usize>,
     pub(crate) sa: SuffixArray,
@@ -104,7 +106,7 @@ impl<R: io::Read> IndexBuilder<R> {
             seq.push(DELIMITER);
             ends.push(seq.len());
 
-            name_arena.extend(utils::extract_byte_name(record.id(), &self.header_sep));
+            name_arena.extend(utils::extract_name_bytes(record.id(), &self.header_sep));
             name_arena.push(b'\n');
             name_ends.push(name_arena.len());
 

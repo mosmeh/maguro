@@ -54,7 +54,10 @@ pub struct Mapper<'a> {
 
 impl Mapper<'_> {
     pub fn map(&mut self, query: &[u8]) -> Vec<Mapping> {
-        assert!(query.len() >= self.seed_min_len);
+        if query.len() < self.seed_min_len {
+            // TODO
+            return Vec::new();
+        }
 
         let rc_query = sequence::reverse_complement(&query);
 

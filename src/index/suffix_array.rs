@@ -1,42 +1,68 @@
 use crate::sequence;
 use bio::data_structures::suffix_array::suffix_array;
+use boomphf::hashmap::BoomHashMap2;
 use serde::{Deserialize, Serialize};
+use std::collections::HashSet;
 use std::ops::Range;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+struct Kmer(u64);
+
+impl Kmer {
+    fn new(seq: &[u8]) -> Self {
+        debug_assert!(seq.len() * 2 < std::mem::size_of::<u64>() * 8);
+
+        let mut kmer = 0;
+        for x in seq {
+            kmer |= sequence::code_to_two_bit(*x) as u64;
+            kmer <<= 2;
+        }
+        Kmer(kmer)
+    }
+}
 
 #[derive(Serialize, Deserialize)]
 pub struct SuffixArray {
     pub array: Vec<usize>,
     child: Vec<usize>,
-    buckets: Vec<Range<usize>>,
+    buckets: BoomHashMap2<Kmer, usize, usize>,
     bucket_width: usize,
 }
 
 impl SuffixArray {
     pub fn new(text: &[u8], bucket_width: usize) -> Self {
-        assert!(bucket_width * 2 < std::mem::size_of::<usize>() * 8);
-
         let array = suffix_array(text);
         let lcp = make_lcp_array(text, &array);
         let child = make_child_table(&lcp);
 
-        let bucket_len = 1 << (2 * bucket_width);
-        let mut prefix = vec![0; bucket_width];
-        let mut buckets = Vec::with_capacity(bucket_len);
+        let mut seen = HashSet::new();
+        let mut keys = Vec::new();
+        let mut starts = Vec::new();
+        let mut ends = Vec::new();
 
-        for i in 0..bucket_len {
-            for (bit, x) in prefix.iter_mut().enumerate() {
-                *x = sequence::two_bit_to_code((i >> (2 * bit)) as u8);
+        for i in 0..=(text.len() - bucket_width) {
+            let query = &text[i..i + bucket_width];
+            if query.contains(&0) || query.contains(&5) {
+                continue;
             }
-            buckets.push(
-                search_suffix_array(&array, &child, text, &prefix, 0, 0, text.len(), 0)
-                    .unwrap_or_default(),
-            );
+
+            let kmer = Kmer::new(&query);
+            if !seen.contains(&kmer) {
+                if let Some(r) =
+                    search_suffix_array(&array, &child, text, &query, 0, 0, text.len(), 0)
+                {
+                    seen.insert(kmer);
+                    keys.push(kmer);
+                    starts.push(r.start);
+                    ends.push(r.end);
+                }
+            }
         }
 
         Self {
             array,
             child,
-            buckets,
+            buckets: BoomHashMap2::new_parallel(keys, starts, ends),
             bucket_width,
         }
     }
@@ -46,16 +72,14 @@ impl SuffixArray {
             return search_suffix_array(&self.array, &self.child, text, query, 0, 0, text.len(), 0);
         }
 
-        let mut idx = 0;
-        for (i, x) in query[..self.bucket_width].iter().enumerate() {
-            idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * i);
-        }
-
-        let range = &self.buckets[idx];
-        if range.start == range.end {
+        let kmer = Kmer::new(&query[..self.bucket_width]);
+        let range = if let Some((start, end)) = self.buckets.get(&kmer) {
+            *start..*end
+        } else {
             return None;
-        } else if query.len() == self.bucket_width {
-            return Some(range.clone());
+        };
+        if query.len() == self.bucket_width {
+            return Some(range);
         }
 
         let store_pos = if self.child[range.start] < range.end {
