@@ -1,13 +1,16 @@
+mod parallel;
+
 use super::Command;
+use anyhow::{anyhow, Result};
 use bio::io::fasta::{self, FastaRead};
 use maguro::{
     index::Index,
-    mapper::{align::AlignmentConfig, MapperBuilder},
+    mapper::{align::AlignmentConfig, Mapper, MapperBuilder},
     sam, sequence, utils,
 };
 use std::{
     fs::File,
-    io::{BufReader, BufWriter},
+    io::{self, BufReader, BufWriter, Write},
     path::PathBuf,
 };
 use structopt::StructOpt;
@@ -34,64 +37,93 @@ pub struct MapCommand {
     alignment_config: AlignmentConfig,
     #[structopt(long)]
     header_sep: Option<String>,
+    #[structopt(short, long, default_value = "1")]
+    threads: usize,
 }
 
 impl Command for MapCommand {
-    fn run(self) -> anyhow::Result<()> {
+    fn run(self) -> Result<()> {
         let index: Index = {
-            let reader = BufReader::new(File::open(self.index)?);
+            let reader = BufReader::new(File::open(&self.index)?);
             bincode::deserialize_from(reader)?
         };
-        let mut mapper = MapperBuilder::new(&index)
-            .seed_min_len(self.seed_min_len)
-            .seed_max_hits(self.multiplicity)
-            .consensus_fraction(self.consensus_fraction)
-            .coverage_score_ratio(self.coverage_score_ratio)
-            .max_splice_gap(self.max_splice_gap)
-            .min_score_fraction(self.min_score_fraction)
-            .alignment_config(self.alignment_config)
-            .build();
 
-        let out = std::io::stdout();
+        let mut out = io::stdout();
+        {
+            let mut out = BufWriter::new(out.lock());
+            sam::write_header(&mut out, &index)?;
+            out.flush()?;
+        }
+
+        let mut reader = fasta::Reader::from_file(&self.read)?;
+
+        if self.threads > 1 {
+            parallel::parallel_map(self, &mut out, &index, &mut reader)?;
+            return Ok(());
+        }
+
+        let mut mapper = build_mapper(&index, &self);
         let mut out = BufWriter::new(out.lock());
-        sam::write_header(&mut out, &index)?;
 
-        let mut reader = fasta::Reader::from_file(self.read)?;
         let mut record = fasta::Record::new();
         reader.read(&mut record)?;
 
         while !record.is_empty() {
-            record.check().map_err(|e| anyhow::anyhow!(e.to_owned()))?;
+            record.check().map_err(|e| anyhow!(e.to_owned()))?;
 
             let qname = utils::extract_name_bytes(record.id(), &self.header_sep);
-            let query = sequence::encode(&record.seq());
-
-            let mut mappings = mapper.map(&query);
-            if mappings.is_empty() {
-                sam::write_unmapped(&mut out, qname, record.seq())?;
-            } else {
-                mappings.sort_by(|a, b| b.score.cmp(&a.score));
-
-                let mut secondary = false;
-                let mut rc_query_cache = None;
-
-                for mapping in mappings {
-                    sam::write_mapping(
-                        &mut out,
-                        &index,
-                        qname,
-                        &record.seq(),
-                        &mapping,
-                        secondary,
-                        &mut rc_query_cache,
-                    )?;
-                    secondary = true;
-                }
-            }
+            map(&mut out, &index, &mut mapper, qname, record.seq())?;
 
             reader.read(&mut record)?;
         }
 
         Ok(())
     }
+}
+
+fn build_mapper<'a>(index: &'a Index, config: &MapCommand) -> Mapper<'a> {
+    MapperBuilder::new(&index)
+        .seed_min_len(config.seed_min_len)
+        .seed_max_hits(config.multiplicity)
+        .consensus_fraction(config.consensus_fraction)
+        .coverage_score_ratio(config.coverage_score_ratio)
+        .max_splice_gap(config.max_splice_gap)
+        .min_score_fraction(config.min_score_fraction)
+        .alignment_config(config.alignment_config.clone())
+        .build()
+}
+
+fn map<'a, W: Write>(
+    mut out: W,
+    index: &Index,
+    mapper: &mut Mapper<'a>,
+    qname: &[u8],
+    seq: &[u8],
+) -> Result<()> {
+    let encoded_seq = sequence::encode(&seq);
+
+    let mut mappings = mapper.map(&encoded_seq);
+    if mappings.is_empty() {
+        sam::write_unmapped(&mut out, qname, seq)?;
+    } else {
+        mappings.sort_by(|a, b| b.score.cmp(&a.score));
+
+        let mut secondary = false;
+        let mut rc_query_cache = None;
+
+        for mapping in mappings {
+            sam::write_mapping(
+                &mut out,
+                &index,
+                qname,
+                seq,
+                &mapping,
+                secondary,
+                &mut rc_query_cache,
+            )?;
+            secondary = true;
+        }
+    }
+
+    Ok(())
 }
