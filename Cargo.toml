@@ -14,8 +14,10 @@ crossbeam-deque = "0.8.0"
 crossbeam-utils = "0.8.1"
 itertools = "0.10.0"
 ksw2 = { path = "ksw2" }
+prettytable-rs = "0.8.0"
 serde = { version = "1.0.118", features = ["derive"] }
 serde_bytes = "0.11.5"
+size = "0.1.2"
 structopt = "0.3.21"
 
 [lib]
@@ -25,6 +27,9 @@ path = "src/lib.rs"
 name = "maguro"
 path = "src/bin/maguro/main.rs"
 doc = false
+
+[profile.dev]
+opt-level = 3
 
 [profile.release]
 lto = true

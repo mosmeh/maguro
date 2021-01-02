@@ -1,6 +1,6 @@
 mod commands;
 
-use commands::{Command, IndexCommand, MapCommand};
+use commands::*;
 use structopt::{clap::AppSettings, StructOpt};
 
 #[derive(StructOpt)]
@@ -16,11 +16,13 @@ use structopt::{clap::AppSettings, StructOpt};
 enum Opt {
     Index(IndexCommand),
     Map(MapCommand),
+    Stats(StatsCommand),
 }
 
 fn main() -> anyhow::Result<()> {
     match Opt::from_args() {
         Opt::Index(cmd) => cmd.run(),
         Opt::Map(cmd) => cmd.run(),
+        Opt::Stats(cmd) => cmd.run(),
     }
 }

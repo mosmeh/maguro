@@ -14,13 +14,13 @@ pub const DELIMITER: u8 = b'$';
 #[derive(Serialize, Deserialize)]
 pub struct Index {
     #[serde(with = "serde_bytes")]
-    pub(crate) seq: Vec<u8>,
-    ends: Vec<usize>,
-    rank_dict: Rank9b,
+    pub seq: Vec<u8>,
+    pub ends: Vec<usize>,
+    pub rank_dict: Rank9b,
     #[serde(with = "serde_bytes")]
-    name_arena: Vec<u8>,
-    name_ends: Vec<usize>,
-    pub(crate) sa: SuffixArray,
+    pub name_arena: Vec<u8>,
+    pub name_ends: Vec<usize>,
+    pub sa: SuffixArray,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]

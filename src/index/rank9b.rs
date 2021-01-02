@@ -48,4 +48,8 @@ impl Rank9b {
             + (self.counts[block + 1] >> (63 - offset * 9) & 0x1FF)
             + (self.bits[word] & ((1u64 << (k % 64)) - 1)).count_ones() as u64
     }
+
+    pub fn size_bytes(&self) -> usize {
+        std::mem::size_of::<u64>() * (self.bits.len() + self.counts.len())
+    }
 }

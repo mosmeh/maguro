@@ -6,9 +6,9 @@ use std::ops::Range;
 #[derive(Serialize, Deserialize)]
 pub struct SuffixArray {
     pub array: Vec<usize>,
-    child: Vec<usize>,
-    buckets: Vec<(u32, u16)>,
-    bucket_width: usize,
+    pub child: Vec<usize>,
+    pub buckets: Vec<(u32, u16)>,
+    pub bucket_width: usize,
 }
 
 impl SuffixArray {
