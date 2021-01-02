@@ -7,7 +7,7 @@ use std::ops::Range;
 pub struct SuffixArray {
     pub array: Vec<usize>,
     child: Vec<usize>,
-    buckets: Vec<Range<usize>>,
+    buckets: Vec<(u32, u16)>,
     bucket_width: usize,
 }
 
@@ -27,10 +27,9 @@ impl SuffixArray {
             for (bit, x) in prefix.iter_mut().enumerate() {
                 *x = sequence::two_bit_to_code((i >> (2 * bit)) as u8);
             }
-            buckets.push(
-                search_suffix_array(&array, &child, text, &prefix, 0, 0, text.len(), 0)
-                    .unwrap_or_default(),
-            );
+            let range = search_suffix_array(&array, &child, text, &prefix, 0, 0, text.len(), 0)
+                .unwrap_or_default();
+            buckets.push((range.start as u32, (range.end - range.start) as u16));
         }
 
         Self {
@@ -42,26 +41,29 @@ impl SuffixArray {
     }
 
     pub fn search(&self, text: &[u8], query: &[u8]) -> Option<Range<usize>> {
-        if query.len() < self.bucket_width {
-            return search_suffix_array(&self.array, &self.child, text, query, 0, 0, text.len(), 0);
-        }
+        debug_assert!(self.bucket_width <= query.len());
 
         let mut idx = 0;
         for (i, x) in query[..self.bucket_width].iter().enumerate() {
             idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * i);
         }
 
-        let range = &self.buckets[idx];
-        if range.start == range.end {
+        let (range_start, range_len) = &self.buckets[idx];
+        if *range_len == 0 {
             return None;
-        } else if query.len() == self.bucket_width {
-            return Some(range.clone());
         }
 
-        let store_pos = if self.child[range.start] < range.end {
-            range.start
+        let begin = *range_start as usize;
+        let end = begin + *range_len as usize;
+
+        if query.len() == self.bucket_width {
+            return Some(begin..end);
+        }
+
+        let store_pos = if self.child[begin] < end {
+            begin
         } else {
-            range.end - 1
+            end - 1
         };
 
         search_suffix_array(
@@ -70,8 +72,8 @@ impl SuffixArray {
             text,
             query,
             self.bucket_width,
-            range.start,
-            range.end,
+            begin,
+            end,
             store_pos,
         )
     }
@@ -81,6 +83,7 @@ impl SuffixArray {
     ///
     /// Returns `(suffix array range, match length)`.
     /// If no such match was found, `None` is returned.
+    #[inline]
     pub fn extension_search(
         &self,
         text: &[u8],
@@ -88,61 +91,65 @@ impl SuffixArray {
         min_len: usize,
         max_hits: usize,
     ) -> Option<(Range<usize>, usize)> {
-        assert!(query.len() >= min_len);
+        debug_assert!(self.bucket_width <= min_len && min_len <= query.len());
 
-        self.search(text, &query[..min_len]).and_then(|range| {
-            let mut depth = min_len;
-            let mut begin = range.start;
-            let mut end = range.end;
+        let query_len = query.len();
 
-            if depth == query.len() && end - begin > max_hits {
+        let mut idx = 0;
+        for (i, x) in query[..self.bucket_width].iter().enumerate() {
+            idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * i);
+        }
+
+        let (range_start, range_len) = &self.buckets[idx];
+        if *range_len == 0 || (min_len == query_len && *range_len > max_hits as u16) {
+            return None;
+        }
+
+        let mut begin = *range_start as usize;
+        let mut end = begin + *range_len as usize;
+
+        let mut depth = 0;
+        let mut store_pos = if self.child[begin] < end {
+            begin
+        } else {
+            end - 1
+        };
+
+        while depth < min_len {
+            if !do_one_step(
+                &self.array,
+                &self.child,
+                text,
+                query,
+                &mut depth,
+                &mut begin,
+                &mut end,
+                &mut store_pos,
+            ) {
                 return None;
             }
+        }
 
-            let mut store_pos = if self.child[begin] < end {
-                begin
-            } else {
-                end - 1
-            };
-
-            'depth_loop: while depth < query.len() && end - begin > max_hits {
-                let q = query[depth];
-                let mut b = text[self.array[begin] + depth];
-                if q < b {
-                    return None;
-                }
-
-                loop {
-                    let e = text[self.array[end - 1] + depth];
-                    if q > e {
-                        return None;
-                    }
-
-                    loop {
-                        if b == e {
-                            depth += 1;
-                            continue 'depth_loop;
-                        }
-                        let mid = self.child[store_pos];
-                        let m = text[self.array[mid] + depth];
-                        if q < m {
-                            end = mid;
-                            store_pos = mid - 1;
-                            break;
-                        }
-                        begin = mid;
-                        b = m;
-                        store_pos = mid;
-                    }
-                }
+        while depth < query_len && end - begin > max_hits {
+            if !do_one_step(
+                &self.array,
+                &self.child,
+                text,
+                query,
+                &mut depth,
+                &mut begin,
+                &mut end,
+                &mut store_pos,
+            ) {
+                return None;
             }
+        }
 
-            if depth == query.len() && end - begin > max_hits {
-                None
-            } else {
-                Some((begin..end, depth))
-            }
-        })
+        if depth == query_len && end - begin > max_hits {
+            None
+        } else {
+            Some((begin..end, depth))
+        }
     }
 }
 
@@ -157,39 +164,65 @@ fn search_suffix_array(
     mut end: usize,
     mut store_pos: usize,
 ) -> Option<Range<usize>> {
-    'depth_loop: while depth < query.len() {
-        let q = query[depth];
-        let mut b = text[array[begin] + depth];
-        if q < b {
+    while depth < query.len() {
+        if !do_one_step(
+            array,
+            child,
+            text,
+            query,
+            &mut depth,
+            &mut begin,
+            &mut end,
+            &mut store_pos,
+        ) {
             return None;
-        }
-
-        loop {
-            let e = text[array[end - 1] + depth];
-            if q > e {
-                return None;
-            }
-
-            loop {
-                if b == e {
-                    depth += 1;
-                    continue 'depth_loop;
-                }
-                let mid = child[store_pos];
-                let m = text[array[mid] + depth];
-                if q < m {
-                    end = mid;
-                    store_pos = mid - 1;
-                    break;
-                }
-                begin = mid;
-                b = m;
-                store_pos = mid;
-            }
         }
     }
 
     Some(begin..end)
+}
+
+#[allow(clippy::too_many_arguments)]
+#[inline(always)]
+fn do_one_step(
+    array: &[usize],
+    child: &[usize],
+    text: &[u8],
+    query: &[u8],
+    depth: &mut usize,
+    begin: &mut usize,
+    end: &mut usize,
+    store_pos: &mut usize,
+) -> bool {
+    let q = query[*depth];
+    let mut b = text[array[*begin] + *depth];
+    if q < b {
+        return false;
+    }
+
+    loop {
+        let e = text[array[*end - 1] + *depth];
+        if q > e {
+            return false;
+        }
+
+        loop {
+            if b == e {
+                *depth += 1;
+                return true;
+            }
+            let mid = child[*store_pos];
+            let m = text[array[mid] + *depth];
+            if q < m {
+                *end = mid;
+                *store_pos = mid - 1;
+                break;
+            }
+            *begin = mid;
+            b = m;
+            *store_pos = mid;
+        }
+    }
 }
 
 fn make_lcp_array(text: &[u8], sa: &[usize]) -> Vec<usize> {
@@ -275,7 +308,7 @@ mod tests {
     fn check_search(text: &[u8], query: &[u8], expected: Option<Vec<usize>>) {
         let text = sequence::encode(text);
         let query = sequence::encode(query);
-        let sa = SuffixArray::new(&text, 2);
+        let sa = SuffixArray::new(&text, 1);
         let got: Option<Vec<usize>> = sa
             .search(&text, &query)
             .map(|range| range.map(|i| sa.array[i]).sorted().collect());

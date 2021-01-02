@@ -54,7 +54,10 @@ pub struct Mapper<'a> {
 
 impl Mapper<'_> {
     pub fn map(&mut self, query: &[u8]) -> Vec<Mapping> {
-        assert!(query.len() >= self.seed_min_len);
+        if query.len() < self.seed_min_len {
+            // TODO
+            return Vec::new();
+        }
 
         let rc_query = sequence::reverse_complement(&query);
 
@@ -394,7 +397,7 @@ mod tests {
         }
 
         let cursor = std::io::Cursor::new(&fasta);
-        let index = IndexBuilder::new(cursor).build().unwrap();
+        let index = IndexBuilder::new(cursor).bucket_width(2).build().unwrap();
         let mut mapper = MapperBuilder::new(&index)
             .seed_min_len(3)
             .min_score_fraction(0.25)

@@ -13,6 +13,7 @@ bstr = "0.2.14"
 itertools = "0.10.0"
 ksw2 = { path = "ksw2" }
 serde = { version = "1.0.118", features = ["derive"] }
+serde_bytes = "0.11.5"
 structopt = "0.3.21"
 
 [lib]
@@ -22,3 +23,7 @@ path = "src/lib.rs"
 name = "maguro"
 path = "src/bin/maguro/main.rs"
 doc = false
+
+[profile.release]
+lto = true
+codegen-units = 1

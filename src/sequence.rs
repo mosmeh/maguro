@@ -82,10 +82,12 @@ pub fn reverse_complement(seq: &[u8]) -> Vec<u8> {
         .collect()
 }
 
+#[inline]
 pub fn code_to_two_bit(x: u8) -> u8 {
     (x - 1) & 0b11
 }
 
+#[inline]
 pub fn two_bit_to_code(x: u8) -> u8 {
     (x & 0b11) + 1
 }
