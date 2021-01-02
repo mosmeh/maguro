@@ -5,17 +5,20 @@ use std::ops::Range;
 
 #[derive(Serialize, Deserialize)]
 pub struct SuffixArray {
-    pub array: Vec<usize>,
-    pub child: Vec<usize>,
-    pub buckets: Vec<(u32, u16)>,
+    pub array: Vec<u32>,
+    pub child: Vec<u32>,
+    pub buckets: Vec<Range<u32>>,
     pub bucket_width: usize,
 }
 
 impl SuffixArray {
     pub fn new(text: &[u8], bucket_width: usize) -> Self {
+        assert!(text.len() <= u32::MAX as usize + 1);
         assert!(bucket_width * 2 < std::mem::size_of::<usize>() * 8);
 
         let array = suffix_array(text);
+        let array: Vec<_> = array.into_iter().map(|x| x as u32).collect();
+
         let lcp = make_lcp_array(text, &array);
         let child = make_child_table(&lcp);
 
@@ -29,7 +32,7 @@ impl SuffixArray {
             }
             let range = search_suffix_array(&array, &child, text, &prefix, 0, 0, text.len(), 0)
                 .unwrap_or_default();
-            buckets.push((range.start as u32, (range.end - range.start) as u16));
+            buckets.push(range.start as u32..range.end as u32);
         }
 
         Self {
@@ -48,19 +51,19 @@ impl SuffixArray {
             idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * i);
         }
 
-        let (range_start, range_len) = &self.buckets[idx];
-        if *range_len == 0 {
+        let range = &self.buckets[idx];
+        if range.start == range.end {
             return None;
         }
 
-        let begin = *range_start as usize;
-        let end = begin + *range_len as usize;
+        let begin = range.start as usize;
+        let end = range.end as usize;
 
         if query.len() == self.bucket_width {
             return Some(begin..end);
         }
 
-        let store_pos = if self.child[begin] < end {
+        let store_pos = if self.child[begin] < end as u32 {
             begin
         } else {
             end - 1
@@ -100,16 +103,18 @@ impl SuffixArray {
             idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * i);
         }
 
-        let (range_start, range_len) = &self.buckets[idx];
-        if *range_len == 0 || (min_len == query_len && *range_len > max_hits as u16) {
+        let range = &self.buckets[idx];
+        if range.start == range.end
+            || (min_len == query_len && range.end - range.start > max_hits as u32)
+        {
             return None;
         }
 
-        let mut begin = *range_start as usize;
-        let mut end = begin + *range_len as usize;
+        let mut begin = range.start as usize;
+        let mut end = range.end as usize;
 
         let mut depth = 0;
-        let mut store_pos = if self.child[begin] < end {
+        let mut store_pos = if self.child[begin] < end as u32 {
             begin
         } else {
             end - 1
@@ -155,8 +160,8 @@ impl SuffixArray {
 
 #[allow(clippy::too_many_arguments)]
 fn search_suffix_array(
-    array: &[usize],
-    child: &[usize],
+    array: &[u32],
+    child: &[u32],
     text: &[u8],
     query: &[u8],
     mut depth: usize,
@@ -185,8 +190,8 @@ fn search_suffix_array(
 #[allow(clippy::too_many_arguments)]
 #[inline(always)]
 fn do_one_step(
-    array: &[usize],
-    child: &[usize],
+    array: &[u32],
+    child: &[u32],
     text: &[u8],
     query: &[u8],
     depth: &mut usize,
@@ -195,13 +200,13 @@ fn do_one_step(
     store_pos: &mut usize,
 ) -> bool {
     let q = query[*depth];
-    let mut b = text[array[*begin] + *depth];
+    let mut b = text[array[*begin] as usize + *depth];
     if q < b {
         return false;
     }
 
     loop {
-        let e = text[array[*end - 1] + *depth];
+        let e = text[array[*end - 1] as usize + *depth];
         if q > e {
             return false;
         }
@@ -211,8 +216,8 @@ fn do_one_step(
                 *depth += 1;
                 return true;
             }
-            let mid = child[*store_pos];
-            let m = text[array[mid] + *depth];
+            let mid = child[*store_pos] as usize;
+            let m = text[array[mid] as usize + *depth];
             if q < m {
                 *end = mid;
                 *store_pos = mid - 1;
@@ -225,12 +230,12 @@ fn do_one_step(
     }
 }
 
-fn make_lcp_array(text: &[u8], sa: &[usize]) -> Vec<usize> {
+fn make_lcp_array(text: &[u8], sa: &[u32]) -> Vec<u32> {
     let len = text.len();
     let mut inv_sa = vec![0; len];
     let mut lcp = vec![0; len];
     for i in 0..len {
-        inv_sa[sa[i]] = i;
+        inv_sa[sa[i] as usize] = i;
     }
 
     // Kasai's algorithm
@@ -240,11 +245,11 @@ fn make_lcp_array(text: &[u8], sa: &[usize]) -> Vec<usize> {
             k = 0;
             continue;
         }
-        let j = sa[inv_sa[i] + 1];
-        while i.max(j) + k < len && text[i + k] == text[j + k] {
+        let j = sa[inv_sa[i] + 1] as usize;
+        while i + k < len && j + k < len && text[i + k] == text[j + k] {
             k += 1;
         }
-        lcp[inv_sa[i] + 1] = k;
+        lcp[inv_sa[i] + 1] = k as u32;
         if k > 0 {
             k -= 1;
         }
@@ -253,7 +258,7 @@ fn make_lcp_array(text: &[u8], sa: &[usize]) -> Vec<usize> {
     lcp
 }
 
-fn make_child_table(lcp: &[usize]) -> Vec<usize> {
+fn make_child_table(lcp: &[u32]) -> Vec<u32> {
     use std::cmp::Ordering::*;
 
     let mut child_table = vec![0; lcp.len()];
@@ -264,7 +269,7 @@ fn make_child_table(lcp: &[usize]) -> Vec<usize> {
             continue;
         }
 
-        let mut min_lcp = usize::MAX;
+        let mut min_lcp = u32::MAX;
         min_indices.clear();
         for (i, l) in lcp.iter().enumerate().take(end).skip(beg + 1) {
             match l.cmp(&min_lcp) {
@@ -281,7 +286,7 @@ fn make_child_table(lcp: &[usize]) -> Vec<usize> {
         }
 
         let mid = min_indices[min_indices.len() / 2];
-        child_table[store_pos] = mid;
+        child_table[store_pos] = mid as u32;
 
         stack.push((beg, mid, mid - 1));
         stack.push((mid, end, mid))
@@ -311,7 +316,7 @@ mod tests {
         let sa = SuffixArray::new(&text, 1);
         let got: Option<Vec<usize>> = sa
             .search(&text, &query)
-            .map(|range| range.map(|i| sa.array[i]).sorted().collect());
+            .map(|range| range.map(|i| sa.array[i] as usize).sorted().collect());
         assert_eq!(got, expected);
     }
 
@@ -351,7 +356,7 @@ mod tests {
 
         let got: Option<(Vec<_>, usize)> = sa
             .extension_search(&text, &query, min_len, max_hits)
-            .map(|(range, len)| (range.map(|i| sa.array[i]).sorted().collect(), len));
+            .map(|(range, len)| (range.map(|i| sa.array[i] as usize).sorted().collect(), len));
 
         assert_eq!(got, expected);
         if let Some((hits, _)) = got {

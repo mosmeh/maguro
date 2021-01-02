@@ -113,19 +113,19 @@ impl Mapper<'_> {
 
         let mut mappings = Vec::new();
 
-        for ((seq_id, strand), chains) in ref_to_chains.iter() {
+        for ((seq_id, strand), chains) in ref_to_chains.into_iter() {
             let (align_query, rev_align_query): (&[u8], &[u8]) = match strand {
                 Strand::Forward => (query, &rev_query),
                 Strand::Reverse => (&rc_query, &compl_query),
             };
 
             let chains = chains
-                .iter()
+                .into_iter()
                 .filter(|chain| chain.score >= chain_score_threshold);
 
             if let Some(mapping) = self.calc_best_mapping(
-                *seq_id,
-                *strand,
+                seq_id,
+                strand,
                 align_query,
                 rev_align_query,
                 chains,
@@ -157,7 +157,7 @@ impl Mapper<'_> {
                 );
                 if let Some((range, len)) = result {
                     for i in range {
-                        let pos = self.index.sa.array[i];
+                        let pos = self.index.sa.array[i] as usize;
                         let id = self.index.seq_id_from_pos(pos);
 
                         ref_to_anchors
@@ -187,13 +187,13 @@ impl Mapper<'_> {
         ref_to_anchors
     }
 
-    fn calc_best_mapping<'b>(
+    fn calc_best_mapping(
         &mut self,
         seq_id: SequenceId,
         strand: Strand,
         query: &[u8],
         rev_query: &[u8],
-        chains: impl Iterator<Item = &'b Chain>,
+        chains: impl Iterator<Item = Chain>,
         score_threshold: i32,
     ) -> Option<Mapping> {
         let seq_range = self.index.seq_range(seq_id);
@@ -216,7 +216,7 @@ impl Mapper<'_> {
         let mut best_score = score_threshold - 1;
 
         'chain_loop: for chain in chains {
-            let anchors = &chain.anchors;
+            let anchors = chain.anchors;
             let mut score = 0;
             let mut remaining_len = query.len();
 

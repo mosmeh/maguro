@@ -77,6 +77,7 @@ impl Command for MapCommand {
             reader.read(&mut record)?;
         }
 
+        out.flush()?;
         Ok(())
     }
 }

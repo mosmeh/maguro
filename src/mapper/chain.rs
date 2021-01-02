@@ -100,9 +100,9 @@ pub fn chain_anchors(
             }
 
             let anchors = anchor_indices
-                .iter()
+                .into_iter()
                 .rev()
-                .map(|i| anchors[*i].clone())
+                .map(|i| anchors[i].clone())
                 .collect();
 
             Some(Chain {
