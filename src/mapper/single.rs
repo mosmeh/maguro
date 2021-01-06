@@ -18,7 +18,7 @@ impl Mapper<'_> {
         let rc_query = sequence::reverse_complement(&query);
 
         // seeding
-        let ref_to_anchors = self.search_anchors(query, &rc_query);
+        let ref_to_anchors = self.search_anchors(query, &rc_query, false);
         if ref_to_anchors.is_empty() {
             return Vec::new();
         }

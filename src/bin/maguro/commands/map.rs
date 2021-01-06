@@ -5,7 +5,7 @@ use anyhow::{anyhow, Result};
 use bio::io::fasta::{self, FastaRead};
 use maguro::{
     index::Index,
-    mapper::{align::AlignmentConfig, Mapper, MapperBuilder},
+    mapper::{align::AlignmentConfig, LibraryType, Mapper, MapperBuilder},
     sam, sequence, utils,
 };
 use std::{
@@ -27,6 +27,8 @@ pub struct MapCommand {
     #[structopt(short = "2", long)]
     mates2: Option<PathBuf>,
 
+    #[structopt(short, long, default_value = "fr-unstranded")]
+    library_type: LibraryType,
     #[structopt(long, default_value = "1000")]
     max_fragment_len: usize,
 
@@ -128,6 +130,7 @@ impl Command for MapCommand {
 
 fn build_mapper<'a>(index: &'a Index, config: &MapCommand) -> Mapper<'a> {
     MapperBuilder::new(&index)
+        .library_type(config.library_type)
         .seed_min_len(config.seed_min_len)
         .seed_max_hits(config.multiplicity)
         .consensus_fraction(config.consensus_fraction)

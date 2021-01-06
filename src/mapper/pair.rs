@@ -19,13 +19,13 @@ impl Mapper<'_> {
 
         // seeding
         let rc_query1 = sequence::reverse_complement(&query1);
-        let ref_to_anchors1 = self.search_anchors(query1, &rc_query1);
+        let ref_to_anchors1 = self.search_anchors(query1, &rc_query1, false);
         if ref_to_anchors1.is_empty() {
             return Vec::new();
         }
 
         let rc_query2 = sequence::reverse_complement(&query2);
-        let ref_to_anchors2 = self.search_anchors(query2, &rc_query2);
+        let ref_to_anchors2 = self.search_anchors(query2, &rc_query2, true);
         if ref_to_anchors2.is_empty() {
             return Vec::new();
         }
@@ -46,7 +46,6 @@ impl Mapper<'_> {
         let mut pair_score_threshold = f64::MIN;
         let mut ref_to_pairs = HashMap::new();
 
-        // "IU" in https://salmon.readthedocs.io/en/latest/library_type.html
         for ((seq_id, strand), chains1) in &ref_to_chains1 {
             if let Some(chains2) = &ref_to_chains2.get(&(*seq_id, strand.opposite())) {
                 let mut pairs = Vec::new();

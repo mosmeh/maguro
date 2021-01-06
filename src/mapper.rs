@@ -6,9 +6,32 @@ pub mod single;
 use crate::index::{Index, SequenceId};
 use align::{Aligner, AlignmentConfig};
 use chain::Chain;
-use core::ops::Range;
 use itertools::Itertools;
-use std::collections::HashMap;
+use std::{collections::HashMap, ops::Range};
+
+#[derive(Debug, Clone, Copy)]
+pub enum LibraryType {
+    Unstranded,
+    FirstStrand,
+    SecondStrand,
+}
+
+impl std::str::FromStr for LibraryType {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        match &s.to_lowercase()[..] {
+            "fr-unstranded" => Ok(Self::Unstranded),
+            "fr-firststrand" => Ok(Self::FirstStrand),
+            "fr-secondstrand" => Ok(Self::SecondStrand),
+            _ => Err(format!(
+                "Unknown library type {}. \
+            Valid values are: fr-unstranded, fr-firststrand, fr-secondstrand",
+                s
+            )),
+        }
+    }
+}
 
 #[repr(u8)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -43,6 +66,7 @@ pub struct Anchor {
 
 pub struct Mapper<'a> {
     index: &'a Index,
+    library_type: LibraryType,
     seed_min_len: usize,
     seed_max_hits: usize,
     max_fragment_len: usize,
@@ -58,6 +82,7 @@ impl Mapper<'_> {
         &self,
         query: &[u8],
         rc_query: &[u8],
+        is_mate: bool,
     ) -> HashMap<(SequenceId, Strand), Vec<Anchor>> {
         let mut ref_to_anchors: HashMap<(SequenceId, Strand), Vec<Anchor>> = HashMap::new();
 
@@ -95,8 +120,18 @@ impl Mapper<'_> {
             }
         };
 
-        seed(&query, Strand::Forward);
-        seed(&rc_query, Strand::Reverse);
+        match (self.library_type, is_mate) {
+            (LibraryType::Unstranded, _) => {
+                seed(&query, Strand::Forward);
+                seed(&rc_query, Strand::Reverse);
+            }
+            (LibraryType::FirstStrand, false) | (LibraryType::SecondStrand, true) => {
+                seed(&query, Strand::Forward);
+            }
+            (LibraryType::SecondStrand, false) | (LibraryType::FirstStrand, true) => {
+                seed(&rc_query, Strand::Reverse);
+            }
+        }
 
         ref_to_anchors
     }
@@ -249,6 +284,7 @@ impl Mapper<'_> {
 
 pub struct MapperBuilder<'a> {
     index: &'a Index,
+    library_type: LibraryType,
     seed_min_len: usize,
     seed_max_hits: usize,
     max_fragment_len: usize,
@@ -263,6 +299,7 @@ impl<'a> MapperBuilder<'a> {
     pub fn new(index: &'a Index) -> Self {
         Self {
             index,
+            library_type: LibraryType::Unstranded,
             seed_min_len: 31,
             seed_max_hits: 10,
             max_fragment_len: 1000,
@@ -272,6 +309,11 @@ impl<'a> MapperBuilder<'a> {
             min_score_fraction: 0.65,
             alignment_config: Default::default(),
         }
+    }
+
+    pub fn library_type(&mut self, library_type: LibraryType) -> &mut Self {
+        self.library_type = library_type;
+        self
     }
 
     pub fn seed_min_len(&mut self, seed_min_len: usize) -> &mut Self {
@@ -317,6 +359,7 @@ impl<'a> MapperBuilder<'a> {
     pub fn build(&self) -> Mapper<'a> {
         Mapper {
             index: self.index,
+            library_type: self.library_type,
             seed_min_len: self.seed_min_len,
             seed_max_hits: self.seed_max_hits,
             max_fragment_len: self.max_fragment_len,
