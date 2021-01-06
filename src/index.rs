@@ -99,8 +99,9 @@ impl<R: io::Read> IndexBuilder<R> {
 
         let mut record = fasta::Record::new();
         self.reader.read(&mut record)?;
+
         while !record.is_empty() {
-            record.check().unwrap();
+            assert!(!record.id().is_empty(), "Expecting id for Fasta record");
 
             seq.extend_from_slice(record.seq());
             seq.push(DELIMITER);

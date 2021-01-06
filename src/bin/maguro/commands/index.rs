@@ -12,7 +12,7 @@ pub struct IndexCommand {
     #[structopt(short, long)]
     reference: PathBuf,
     #[structopt(short, long)]
-    output: PathBuf,
+    index: PathBuf,
     #[structopt(short, long, default_value = "10")]
     bucket_width: usize,
     #[structopt(long)]
@@ -28,7 +28,7 @@ impl Command for IndexCommand {
 
         let index = builder.build()?;
 
-        let mut writer = BufWriter::new(File::create(&self.output)?);
+        let mut writer = BufWriter::new(File::create(&self.index)?);
         bincode::serialize_into(&mut writer, &index)?;
         writer.flush()?;
 
