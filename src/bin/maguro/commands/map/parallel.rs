@@ -1,63 +1,92 @@
 use super::MapCommand;
 use anyhow::{anyhow, Result};
 use bio::io::fasta::{self, FastaRead};
-use crossbeam_deque::{Injector, Stealer, Worker};
 use maguro::{index::Index, mapper::Mapper, utils};
-use std::io::{Stdout, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
+use rayon::prelude::*;
+use std::{
+    io::{self, BufWriter, Write},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc,
+    },
+    thread,
+};
 
-pub fn main(config: MapCommand, out: &mut Stdout, index: &Index) -> Result<()> {
-    let num_workers = config.threads.saturating_sub(1).max(1);
-    let input_finished = AtomicBool::new(false);
-    let injector = Injector::new();
-    let workers: Vec<_> = (0..num_workers).map(|_| Worker::new_fifo()).collect();
-    let stealers: Vec<_> = workers.iter().map(|worker| worker.stealer()).collect();
+struct SingleTask {
+    qname: Vec<u8>,
+    seq: Vec<u8>,
+}
 
-    crossbeam_utils::thread::scope(|s| -> Result<()> {
-        for (worker_id, worker) in workers.into_iter().enumerate() {
-            let stealers: Vec<_> = stealers
-                .iter()
-                .enumerate()
-                .filter(|(i, _)| *i != worker_id)
-                .map(|(_, stealer)| stealer.clone())
-                .collect();
-            s.spawn(|_| {
-                MapWorker::new(
-                    &config,
-                    &out,
-                    &index,
-                    &input_finished,
-                    &injector,
-                    worker,
-                    stealers,
-                )
-                .run()
-                .unwrap()
-            });
+struct PairTask {
+    qname: Vec<u8>,
+    seq1: Vec<u8>,
+    seq2: Vec<u8>,
+}
+
+pub fn main(config: MapCommand, index: &Index, mapper: &Mapper) -> Result<()> {
+    rayon::ThreadPoolBuilder::new()
+        .num_threads(config.threads)
+        .build_global()?;
+
+    let chunk_size = config.chunk * 1024 * 1024;
+
+    let (writer_tx, writer_rx): (crossbeam_channel::Sender<Vec<u8>>, _) =
+        crossbeam_channel::unbounded();
+    let writer_thread = thread::spawn(move || -> Result<()> {
+        let out = io::stdout();
+        let mut writer = BufWriter::new(out.lock());
+        for x in writer_rx.into_iter() {
+            writer.write_all(&x)?;
         }
+        Ok(())
+    });
 
-        if let Some(ref reads) = config.reads {
-            // single-end
+    let mut num_processed = 0;
+    let num_mapped = Arc::new(AtomicUsize::new(0));
 
-            let mut reader = fasta::Reader::from_file(&reads)?;
+    match (config.reads, config.mates1, config.mates2) {
+        (Some(reads), None, None) => {
+            eprintln!("Starting single-end mapping");
+
+            let mut reader = fasta::Reader::from_file(reads)?;
             let mut record = fasta::Record::new();
             reader.read(&mut record)?;
 
             while !record.is_empty() {
-                record.check().map_err(|e| anyhow!(e.to_owned()))?;
+                let mut chunk = Vec::new();
 
-                injector.push(Task::Single {
-                    qname: utils::extract_name_bytes(record.id(), &config.header_sep).to_owned(),
-                    seq: record.seq().to_owned(),
-                });
+                while !record.is_empty() && chunk.len() < chunk_size {
+                    record.check().map_err(|e| anyhow!(e.to_owned()))?;
+                    chunk.push(SingleTask {
+                        qname: utils::extract_name_bytes(record.id(), &config.header_sep)
+                            .to_owned(),
+                        seq: record.seq().to_owned(),
+                    });
+                    reader.read(&mut record)?;
+                }
 
-                reader.read(&mut record)?;
+                chunk.par_iter().try_for_each_with::<_, _, Result<()>>(
+                    writer_tx.clone(),
+                    |tx, task| {
+                        let mut buf = Vec::new();
+                        let mapped =
+                            super::map_single(&mut buf, index, mapper, &task.qname, &task.seq)?;
+                        if mapped {
+                            num_mapped.fetch_add(1, Ordering::Relaxed);
+                        }
+                        tx.send(buf)?;
+                        Ok(())
+                    },
+                )?;
+
+                num_processed += chunk.len();
             }
-        } else {
-            // paired-end
+        }
+        (None, Some(mates1), Some(mates2)) => {
+            eprintln!("Starting paired-end mapping");
 
-            let mut reader1 = fasta::Reader::from_file(config.mates1.as_ref().unwrap())?;
-            let mut reader2 = fasta::Reader::from_file(config.mates2.as_ref().unwrap())?;
+            let mut reader1 = fasta::Reader::from_file(mates1)?;
+            let mut reader2 = fasta::Reader::from_file(mates2)?;
 
             let mut record1 = fasta::Record::new();
             let mut record2 = fasta::Record::new();
@@ -65,122 +94,60 @@ pub fn main(config: MapCommand, out: &mut Stdout, index: &Index) -> Result<()> {
             reader2.read(&mut record2)?;
 
             while !record1.is_empty() {
-                record1.check().map_err(|e| anyhow!(e.to_owned()))?;
-                record2.check().map_err(|e| anyhow!(e.to_owned()))?;
+                let mut chunk = Vec::new();
 
-                injector.push(Task::Pair {
-                    qname: utils::extract_name_bytes(record1.id(), &config.header_sep).to_owned(),
-                    seq1: record1.seq().to_owned(),
-                    seq2: record2.seq().to_owned(),
-                });
+                while !record1.is_empty() && chunk.len() < chunk_size {
+                    record1.check().map_err(|e| anyhow!(e.to_owned()))?;
+                    record2.check().map_err(|e| anyhow!(e.to_owned()))?;
+                    chunk.push(PairTask {
+                        qname: utils::extract_name_bytes(record1.id(), &config.header_sep)
+                            .to_owned(),
+                        seq1: record1.seq().to_owned(),
+                        seq2: record2.seq().to_owned(),
+                    });
+                    reader1.read(&mut record1)?;
+                    reader2.read(&mut record2)?;
+                }
 
-                reader1.read(&mut record1)?;
-                reader2.read(&mut record2)?;
+                chunk.par_iter().try_for_each_with::<_, _, Result<()>>(
+                    (writer_tx.clone(), num_mapped.clone()),
+                    |(tx, num_mapped), task| {
+                        let mut buf = Vec::new();
+                        let mapped = super::map_pair(
+                            &mut buf,
+                            index,
+                            mapper,
+                            &task.qname,
+                            &task.seq1,
+                            &task.seq2,
+                        )?;
+                        if mapped {
+                            num_mapped.fetch_add(1, Ordering::Relaxed);
+                        }
+                        tx.send(buf)?;
+                        Ok(())
+                    },
+                )?;
+
+                num_processed += chunk.len();
             }
 
             assert!(record2.is_empty());
         }
-
-        input_finished.store(true, Ordering::Relaxed);
-
-        Ok(())
-    })
-    .unwrap()
-}
-
-enum Task {
-    Single {
-        qname: Vec<u8>,
-        seq: Vec<u8>,
-    },
-    Pair {
-        qname: Vec<u8>,
-        seq1: Vec<u8>,
-        seq2: Vec<u8>,
-    },
-}
-
-struct MapWorker<'a> {
-    out: &'a Stdout,
-    index: &'a Index,
-    input_finished: &'a AtomicBool,
-    injector: &'a Injector<Task>,
-    worker: Worker<Task>,
-    stealers: Vec<Stealer<Task>>,
-    mapper: Mapper<'a>,
-    out_buf: Vec<u8>,
-}
-
-impl<'a> MapWorker<'a> {
-    fn new(
-        config: &MapCommand,
-        out: &'a Stdout,
-        index: &'a Index,
-        input_finished: &'a AtomicBool,
-        injector: &'a Injector<Task>,
-        worker: Worker<Task>,
-        stealers: Vec<Stealer<Task>>,
-    ) -> Self {
-        Self {
-            out,
-            index,
-            mapper: super::build_mapper(index, config),
-            injector,
-            worker,
-            stealers,
-            input_finished,
-            out_buf: Vec::new(),
-        }
+        _ => unreachable!(),
     }
 
-    fn find_task(&mut self) -> Option<Task> {
-        self.worker.pop().or_else(|| {
-            std::iter::repeat_with(|| {
-                self.injector.steal_batch_and_pop(&self.worker).or_else(|| {
-                    self.stealers
-                        .iter()
-                        .map(|stealer| stealer.steal())
-                        .collect()
-                })
-            })
-            .find(|steal| !steal.is_retry())
-            .and_then(|steal| steal.success())
-        })
-    }
+    eprintln!("Finishing output");
+    drop(writer_tx);
+    writer_thread.join().unwrap()?;
 
-    fn run(&mut self) -> Result<()> {
-        loop {
-            while let Some(task) = self.find_task() {
-                match task {
-                    Task::Single { qname, seq } => super::map_single(
-                        &mut self.out_buf,
-                        self.index,
-                        &mut self.mapper,
-                        &qname,
-                        &seq,
-                    )?,
-                    Task::Pair { qname, seq1, seq2 } => super::map_pair(
-                        &mut self.out_buf,
-                        self.index,
-                        &mut self.mapper,
-                        &qname,
-                        &seq1,
-                        &seq2,
-                    )?,
-                };
-            }
+    let num_mapped = num_mapped.load(std::sync::atomic::Ordering::Relaxed);
+    eprintln!(
+        "Mapped {} / {} reads ({:.2}%)",
+        num_mapped,
+        num_processed,
+        num_mapped as f64 * 100.0 / num_processed as f64
+    );
 
-            if !self.out_buf.is_empty() {
-                {
-                    let mut out = self.out.lock();
-                    out.write_all(&self.out_buf)?;
-                }
-                self.out_buf.clear();
-            }
-
-            if self.input_finished.load(Ordering::Relaxed) && self.injector.is_empty() {
-                return Ok(());
-            }
-        }
-    }
+    Ok(())
 }

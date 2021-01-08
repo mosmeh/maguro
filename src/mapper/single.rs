@@ -9,7 +9,7 @@ pub struct SingleMapping {
 }
 
 impl Mapper<'_> {
-    pub fn map_single(&mut self, query: &[u8]) -> Vec<SingleMapping> {
+    pub fn map_single(&self, query: &[u8]) -> Vec<SingleMapping> {
         if query.len() < self.seed_min_len {
             // TODO
             return Vec::new();
@@ -18,7 +18,7 @@ impl Mapper<'_> {
         let rc_query = sequence::reverse_complement(&query);
 
         // seeding
-        let ref_to_anchors = self.search_anchors(query, &rc_query, false);
+        let ref_to_anchors = self.search_anchors(query, &rc_query, true);
         if ref_to_anchors.is_empty() {
             return Vec::new();
         }
@@ -105,7 +105,7 @@ mod tests {
 
         let cursor = std::io::Cursor::new(&fasta);
         let index = IndexBuilder::new(cursor).bucket_width(2).build().unwrap();
-        let mut mapper = MapperBuilder::new(&index)
+        let mapper = MapperBuilder::new(&index)
             .seed_min_len(3)
             .min_score_fraction(0.25)
             .build();

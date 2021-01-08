@@ -7,11 +7,13 @@ pub struct PairMapping {
     pub pos1: usize,
     pub pos2: usize,
     pub strand: Strand,
-    pub score: i32,
+    pub fragment_len: usize,
+    pub score1: i32,
+    pub score2: i32,
 }
 
 impl Mapper<'_> {
-    pub fn map_pair(&mut self, query1: &[u8], query2: &[u8]) -> Vec<PairMapping> {
+    pub fn map_pair(&self, query1: &[u8], query2: &[u8]) -> Vec<PairMapping> {
         if query1.len() < self.seed_min_len || query2.len() < self.seed_min_len {
             // TODO
             return Vec::new();
@@ -19,13 +21,13 @@ impl Mapper<'_> {
 
         // seeding
         let rc_query1 = sequence::reverse_complement(&query1);
-        let ref_to_anchors1 = self.search_anchors(query1, &rc_query1, false);
+        let ref_to_anchors1 = self.search_anchors(query1, &rc_query1, true);
         if ref_to_anchors1.is_empty() {
             return Vec::new();
         }
 
         let rc_query2 = sequence::reverse_complement(&query2);
-        let ref_to_anchors2 = self.search_anchors(query2, &rc_query2, true);
+        let ref_to_anchors2 = self.search_anchors(query2, &rc_query2, false);
         if ref_to_anchors2.is_empty() {
             return Vec::new();
         }
@@ -51,19 +53,10 @@ impl Mapper<'_> {
                 let mut pairs = Vec::new();
 
                 for chain1 in chains1 {
-                    let first_anchor1 = &chain1.anchors[0];
-                    let last_anchor1 = &chain1.anchors[chain1.anchors.len() - 1];
-
                     for chain2 in *chains2 {
-                        let first_anchor2 = &chain2.anchors[0];
-                        let last_anchor2 = &chain2.anchors[chain2.anchors.len() - 1];
-
-                        let fragment_len = if first_anchor1.ref_pos < first_anchor2.ref_pos {
-                            last_anchor2.ref_pos + last_anchor2.len - first_anchor1.ref_pos
-                        } else {
-                            last_anchor1.ref_pos + last_anchor1.len - first_anchor2.ref_pos
-                        };
-                        if fragment_len > self.max_fragment_len {
+                        if calc_fragment_len(&chain1.anchors, &chain2.anchors)
+                            > self.max_fragment_len
+                        {
                             continue;
                         }
 
@@ -173,7 +166,9 @@ impl Mapper<'_> {
                         pos2: (first_anchor2.ref_pos - seq_range.start)
                             .saturating_sub(first_anchor2.query_pos),
                         strand: *strand,
-                        score,
+                        fragment_len: calc_fragment_len(&pair.0.anchors, &pair.1.anchors),
+                        score1,
+                        score2,
                     });
                 }
             }
@@ -184,6 +179,20 @@ impl Mapper<'_> {
         }
 
         mappings
+    }
+}
+
+fn calc_fragment_len(anchors1: &[Anchor], anchors2: &[Anchor]) -> usize {
+    let first_anchor1 = &anchors1[0];
+    let last_anchor1 = &anchors1[anchors1.len() - 1];
+
+    let first_anchor2 = &anchors2[0];
+    let last_anchor2 = &anchors2[anchors2.len() - 1];
+
+    if first_anchor1.ref_pos < first_anchor2.ref_pos {
+        last_anchor2.ref_pos + last_anchor2.len - first_anchor1.ref_pos
+    } else {
+        last_anchor1.ref_pos + last_anchor1.len - first_anchor2.ref_pos
     }
 }
 
@@ -213,7 +222,7 @@ mod tests {
 
         let cursor = std::io::Cursor::new(&fasta);
         let index = IndexBuilder::new(cursor).bucket_width(2).build().unwrap();
-        let mut mapper = MapperBuilder::new(&index)
+        let mapper = MapperBuilder::new(&index)
             .max_fragment_len(15)
             .seed_min_len(3)
             .min_score_fraction(0.25)

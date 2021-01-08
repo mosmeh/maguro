@@ -1,6 +1,6 @@
 use crate::sequence::DUMMY_CODE;
-use ksw2::{km_destroy, km_init, ksw_extz, ksw_extz_t, ksw_gg2, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY};
-use std::{ffi::c_void, ptr};
+use ksw2::{ksw_extz, ksw_extz_t, ksw_gg2, KSW_EZ_RIGHT, KSW_EZ_SCORE_ONLY};
+use std::ptr;
 use structopt::StructOpt;
 
 #[derive(Clone, Debug, StructOpt)]
@@ -30,16 +30,6 @@ pub struct Aligner {
     config: AlignmentConfig,
     sequence_size: i8,
     score_matrix: Vec<i8>,
-    ez: ksw_extz_t,
-    km: *mut c_void,
-}
-
-impl Drop for Aligner {
-    fn drop(&mut self) {
-        unsafe {
-            km_destroy(self.km);
-        }
-    }
 }
 
 impl Aligner {
@@ -60,8 +50,6 @@ impl Aligner {
             config,
             sequence_size: n as i8,
             score_matrix,
-            ez: unsafe { std::mem::zeroed() },
-            km: unsafe { km_init() },
         }
     }
 
@@ -76,7 +64,7 @@ impl Aligner {
     pub fn banded_global_align(&self, query: &[u8], target: &[u8], bandwidth: i32) -> i32 {
         unsafe {
             ksw_gg2(
-                self.km,
+                ptr::null_mut(),
                 query.len() as i32,
                 query.as_ptr(),
                 target.len() as i32,
@@ -93,14 +81,15 @@ impl Aligner {
         }
     }
 
-    pub fn extension_align(&mut self, query: &[u8], target: &[u8]) -> i32 {
+    pub fn extension_align(&self, query: &[u8], target: &[u8]) -> i32 {
         self.banded_extension_align(query, target, -1)
     }
 
-    pub fn banded_extension_align(&mut self, query: &[u8], target: &[u8], bandwidth: i32) -> i32 {
+    pub fn banded_extension_align(&self, query: &[u8], target: &[u8], bandwidth: i32) -> i32 {
+        let mut ez: ksw_extz_t = unsafe { std::mem::zeroed() };
         unsafe {
             ksw_extz(
-                self.km,
+                ptr::null_mut(),
                 query.len() as i32,
                 query.as_ptr(),
                 target.len() as i32,
@@ -112,10 +101,10 @@ impl Aligner {
                 calc_bandwidth(query, target, bandwidth),
                 -1,
                 (KSW_EZ_SCORE_ONLY | KSW_EZ_RIGHT) as i32,
-                &mut self.ez,
+                &mut ez,
             );
         }
-        self.ez.mqe
+        ez.mqe
     }
 }
 
@@ -167,7 +156,7 @@ mod tests {
 
     #[test]
     fn extension_align() {
-        let mut aligner = Aligner::new(CONFIG);
+        let aligner = Aligner::new(CONFIG);
         let target = sequence::encode(b"atcgggatatatggagagcttagag");
         let query = sequence::encode(b"atcgggatata");
         assert_eq!(

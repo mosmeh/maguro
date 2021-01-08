@@ -1,17 +1,18 @@
 mod parallel;
+mod serial;
 
 use super::Command;
-use anyhow::{anyhow, Result};
-use bio::io::fasta::{self, FastaRead};
+use anyhow::Result;
 use maguro::{
     index::Index,
     mapper::{align::AlignmentConfig, LibraryType, Mapper, MapperBuilder},
-    sam, sequence, utils,
+    sam, sequence,
 };
 use std::{
     fs::File,
     io::{self, BufReader, BufWriter, Write},
     path::PathBuf,
+    time::Instant,
 };
 use structopt::StructOpt;
 
@@ -50,109 +51,72 @@ pub struct MapCommand {
 
     #[structopt(long)]
     header_sep: Option<String>,
+
+    #[structopt(long, default_value = env!("CARGO_PKG_NAME"))]
+    sam_pg: String,
+
     #[structopt(short, long, default_value = "1")]
     threads: usize,
+    #[structopt(short, long, default_value = "1")]
+    chunk: usize,
 }
 
 impl Command for MapCommand {
     fn run(self) -> Result<()> {
+        eprintln!("{:#?}", self);
+
+        eprintln!("Loading index");
         let index: Index = {
             let reader = BufReader::new(File::open(&self.index)?);
             bincode::deserialize_from(reader)?
         };
 
-        let mut out = io::stdout();
+        let mapper = MapperBuilder::new(&index)
+            .library_type(self.library_type)
+            .seed_min_len(self.seed_min_len)
+            .seed_max_hits(self.multiplicity)
+            .consensus_fraction(self.consensus_fraction)
+            .coverage_score_ratio(self.coverage_score_ratio)
+            .max_splice_gap(self.max_splice_gap)
+            .min_score_fraction(self.min_score_fraction)
+            .alignment_config(self.alignment_config.clone())
+            .build();
+
         {
+            let out = io::stdout();
             let mut out = BufWriter::new(out.lock());
-            sam::write_header(&mut out, &index)?;
+            sam::write_header(&mut out, &self.sam_pg, &index)?;
             out.flush()?;
         }
 
+        let start_time = Instant::now();
+
         if self.threads > 1 {
-            parallel::main(self, &mut out, &index)?;
-            return Ok(());
-        }
-
-        let mut mapper = build_mapper(&index, &self);
-        let mut out = BufWriter::new(out.lock());
-
-        if let Some(ref reads) = self.reads {
-            // single-end
-
-            let mut reader = fasta::Reader::from_file(&reads)?;
-            let mut record = fasta::Record::new();
-            reader.read(&mut record)?;
-
-            while !record.is_empty() {
-                record.check().map_err(|e| anyhow!(e.to_owned()))?;
-
-                let qname = utils::extract_name_bytes(record.id(), &self.header_sep);
-                map_single(&mut out, &index, &mut mapper, qname, record.seq())?;
-
-                reader.read(&mut record)?;
-            }
+            parallel::main(self, &index, &mapper)?;
         } else {
-            // paired-end
-
-            let mut reader1 = fasta::Reader::from_file(self.mates1.as_ref().unwrap())?;
-            let mut reader2 = fasta::Reader::from_file(self.mates2.as_ref().unwrap())?;
-
-            let mut record1 = fasta::Record::new();
-            let mut record2 = fasta::Record::new();
-            reader1.read(&mut record1)?;
-            reader2.read(&mut record2)?;
-
-            while !record1.is_empty() {
-                record1.check().map_err(|e| anyhow!(e.to_owned()))?;
-                record2.check().map_err(|e| anyhow!(e.to_owned()))?;
-
-                let qname = utils::extract_name_bytes(record1.id(), &self.header_sep);
-                map_pair(
-                    &mut out,
-                    &index,
-                    &mut mapper,
-                    qname,
-                    record1.seq(),
-                    record2.seq(),
-                )?;
-
-                reader1.read(&mut record1)?;
-                reader2.read(&mut record2)?;
-            }
-
-            assert!(record2.is_empty());
+            serial::main(self, &index, &mapper)?;
         }
 
-        out.flush()?;
+        eprintln!("Elapsed {}ms", start_time.elapsed().as_millis());
+        eprintln!("Finished");
+
         Ok(())
     }
-}
-
-fn build_mapper<'a>(index: &'a Index, config: &MapCommand) -> Mapper<'a> {
-    MapperBuilder::new(&index)
-        .library_type(config.library_type)
-        .seed_min_len(config.seed_min_len)
-        .seed_max_hits(config.multiplicity)
-        .consensus_fraction(config.consensus_fraction)
-        .coverage_score_ratio(config.coverage_score_ratio)
-        .max_splice_gap(config.max_splice_gap)
-        .min_score_fraction(config.min_score_fraction)
-        .alignment_config(config.alignment_config.clone())
-        .build()
 }
 
 fn map_single<'a, W: Write>(
     mut out: W,
     index: &Index,
-    mapper: &mut Mapper<'a>,
+    mapper: &Mapper<'a>,
     qname: &[u8],
     seq: &[u8],
-) -> Result<()> {
+) -> Result<bool> {
     let encoded_seq = sequence::encode(&seq);
 
     let mut mappings = mapper.map_single(&encoded_seq);
     if mappings.is_empty() {
         sam::write_unmapped_single(&mut out, qname, seq)?;
+        Ok(false)
     } else {
         mappings.sort_by(|a, b| b.score.cmp(&a.score));
 
@@ -171,27 +135,28 @@ fn map_single<'a, W: Write>(
             )?;
             secondary = true;
         }
-    }
 
-    Ok(())
+        Ok(true)
+    }
 }
 
 fn map_pair<'a, W: Write>(
     mut out: W,
     index: &Index,
-    mapper: &mut Mapper<'a>,
+    mapper: &Mapper<'a>,
     qname: &[u8],
     seq1: &[u8],
     seq2: &[u8],
-) -> Result<()> {
+) -> Result<bool> {
     let encoded_seq1 = sequence::encode(&seq1);
     let encoded_seq2 = sequence::encode(&seq2);
 
     let mut mappings = mapper.map_pair(&encoded_seq1, &encoded_seq2);
     if mappings.is_empty() {
         sam::write_unmapped_pair(&mut out, qname, seq1, seq2)?;
+        Ok(false)
     } else {
-        mappings.sort_by(|a, b| b.score.cmp(&a.score));
+        mappings.sort_by(|a, b| (b.score1 + b.score2).cmp(&(a.score1 + a.score2)));
 
         let mut secondary = false;
         let mut rc_query_cache1 = None;
@@ -211,7 +176,7 @@ fn map_pair<'a, W: Write>(
             )?;
             secondary = true;
         }
-    }
 
-    Ok(())
+        Ok(true)
+    }
 }

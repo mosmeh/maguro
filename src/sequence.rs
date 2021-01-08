@@ -24,20 +24,11 @@ const DECODE_TABLE: [u8; 256] = {
 };
 
 const COMPLEMENT_TABLE: [u8; 256] = {
-    let mut table = [0; 256];
+    let mut table = [DUMMY_CODE; 256];
     table[1] = 4;
     table[2] = 3;
     table[3] = 2;
     table[4] = 1;
-    table[5] = 5;
-    table[b'A' as usize] = b'T';
-    table[b'a' as usize] = b'T';
-    table[b'C' as usize] = b'G';
-    table[b'c' as usize] = b'G';
-    table[b'G' as usize] = b'C';
-    table[b'g' as usize] = b'C';
-    table[b'T' as usize] = b'A';
-    table[b't' as usize] = b'A';
     table
 };
 

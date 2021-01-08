@@ -3,11 +3,10 @@
 use crate::{
     index::{Index, SequenceId},
     mapper::{pair::PairMapping, single::SingleMapping},
-    sequence,
 };
 use std::io;
 
-pub fn write_header<W: io::Write>(mut out: W, index: &Index) -> io::Result<()> {
+pub fn write_header<W: io::Write>(mut out: W, pg: &str, index: &Index) -> io::Result<()> {
     out.write_all(b"@HD\tVN:1.0\tSO:unknown\n")?;
 
     for i in 0..index.num_seqs() {
@@ -15,14 +14,14 @@ pub fn write_header<W: io::Write>(mut out: W, index: &Index) -> io::Result<()> {
         out.write_all(b"@SQ\tSN:")?;
         out.write_all(index.seq_name(id))?;
         let range = index.seq_range(id);
-        write!(out, "\tLN:{}\n", range.end - range.start)?;
+        write!(out, "\tLN:{}\tDS:T\n", range.end - range.start)?;
     }
 
     write!(
         out,
         "@PG\tID:{}\tPN:{}\tVN:{}\n",
-        env!("CARGO_PKG_NAME"),
-        env!("CARGO_PKG_NAME"),
+        pg,
+        pg,
         env!("CARGO_PKG_VERSION")
     )
 }
@@ -51,7 +50,7 @@ pub fn write_mapping_single<W: io::Write>(
     } else if let Some(rc) = rc_seq_cache {
         rc
     } else {
-        *rc_seq_cache = Some(sequence::reverse_complement(seq));
+        *rc_seq_cache = Some(reverse_complement(seq));
         &rc_seq_cache.as_ref().unwrap()
     };
 
@@ -67,7 +66,7 @@ pub fn write_unmapped_single<W: io::Write>(mut out: W, qname: &[u8], seq: &[u8])
     out.write_all(qname)?;
     out.write_all(b"\t4\t*\t0\t255\t*\t*\t0\t0\t")?;
     out.write_all(seq)?;
-    out.write_all(b"\t*\n")
+    out.write_all(b"\t*\tAS:i:0\n")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -103,7 +102,7 @@ pub fn write_mapping_pair<W: io::Write>(
     } else if let Some(rc) = rc_seq_cache1 {
         rc
     } else {
-        *rc_seq_cache1 = Some(sequence::reverse_complement(seq1));
+        *rc_seq_cache1 = Some(reverse_complement(seq1));
         &rc_seq_cache1.as_ref().unwrap()
     };
     let seq2: &[u8] = if mapping.strand.is_reverse() {
@@ -111,9 +110,17 @@ pub fn write_mapping_pair<W: io::Write>(
     } else if let Some(rc) = rc_seq_cache2 {
         rc
     } else {
-        *rc_seq_cache2 = Some(sequence::reverse_complement(seq2));
+        *rc_seq_cache2 = Some(reverse_complement(seq2));
         &rc_seq_cache2.as_ref().unwrap()
     };
+
+    let min_pos = mapping.pos1.min(mapping.pos2);
+    let ref_len = index.seq_range(mapping.seq_id).len();
+    let fragment_len = if min_pos + mapping.fragment_len > ref_len {
+        ref_len - min_pos
+    } else {
+        mapping.fragment_len
+    } as isize;
 
     // TODO: handle qname1 != qname2
 
@@ -122,24 +129,36 @@ pub fn write_mapping_pair<W: io::Write>(
     out.write_all(rname)?;
     write!(
         out,
-        "\t{}\t255\t{}M\t*\t0\t0\t",
+        "\t{}\t1\t{}M\t=\t{}\t{}\t",
         mapping.pos1 + 1,
-        seq1.len()
+        seq1.len(),
+        mapping.pos2 + 1,
+        if mapping.pos1 < mapping.pos2 {
+            fragment_len
+        } else {
+            -fragment_len
+        }
     )?;
     out.write_all(seq1)?;
-    out.write_all(b"\t*\n")?;
+    write!(out, "\t*\tAS:i:{}\n", mapping.score1)?;
 
     out.write_all(qname)?;
     write!(out, "\t{}\t", flag2)?;
     out.write_all(rname)?;
     write!(
         out,
-        "\t{}\t255\t{}M\t*\t0\t0\t",
+        "\t{}\t1\t{}M\t=\t{}\t{}\t",
         mapping.pos2 + 1,
-        seq2.len()
+        seq2.len(),
+        mapping.pos1 + 1,
+        if mapping.pos1 < mapping.pos2 {
+            -fragment_len
+        } else {
+            fragment_len
+        }
     )?;
     out.write_all(seq2)?;
-    write!(out, "\t*\tAS:i:{}\n", mapping.score)
+    write!(out, "\t*\tAS:i:{}\n", mapping.score2)
 }
 
 pub fn write_unmapped_pair<W: io::Write>(
@@ -152,11 +171,31 @@ pub fn write_unmapped_pair<W: io::Write>(
     out.write_all(qname)?;
     write!(out, "\t{}\t*\t0\t255\t*\t*\t0\t0\t", flag)?;
     out.write_all(seq1)?;
-    out.write_all(b"\t*\n")?;
+    out.write_all(b"\t*\tAS:i:0\n")?;
 
     let flag = 0x1 | 0x4 | 0x8 | 0x80;
     out.write_all(qname)?;
     write!(out, "\t{}\t*\t0\t255\t*\t*\t0\t0\t", flag)?;
     out.write_all(seq2)?;
-    out.write_all(b"\t*\n")
+    out.write_all(b"\t*\tAS:i:0\n")
+}
+
+const COMPLEMENT_TABLE: [u8; 256] = {
+    let mut table = [b'N'; 256];
+    table[b'A' as usize] = b'T';
+    table[b'a' as usize] = b'T';
+    table[b'C' as usize] = b'G';
+    table[b'c' as usize] = b'G';
+    table[b'G' as usize] = b'C';
+    table[b'g' as usize] = b'C';
+    table[b'T' as usize] = b'A';
+    table[b't' as usize] = b'A';
+    table
+};
+
+fn reverse_complement(seq: &[u8]) -> Vec<u8> {
+    seq.iter()
+        .rev()
+        .map(|x| COMPLEMENT_TABLE[*x as usize])
+        .collect()
 }

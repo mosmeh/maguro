@@ -7,7 +7,7 @@ use std::{
 };
 use structopt::StructOpt;
 
-#[derive(StructOpt)]
+#[derive(StructOpt, Debug)]
 pub struct IndexCommand {
     #[structopt(short, long)]
     reference: PathBuf,
@@ -21,13 +21,17 @@ pub struct IndexCommand {
 
 impl Command for IndexCommand {
     fn run(self) -> anyhow::Result<()> {
+        eprintln!("{:#?}", self);
+
         let mut builder = IndexBuilder::from_file(self.reference)?.bucket_width(self.bucket_width);
         if let Some(value) = self.header_sep {
             builder = builder.header_sep(value);
         }
 
+        eprintln!("Indexing");
         let index = builder.build()?;
 
+        eprintln!("Writing");
         let mut writer = BufWriter::new(File::create(&self.index)?);
         bincode::serialize_into(&mut writer, &index)?;
         writer.flush()?;

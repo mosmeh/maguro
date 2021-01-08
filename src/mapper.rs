@@ -82,7 +82,7 @@ impl Mapper<'_> {
         &self,
         query: &[u8],
         rc_query: &[u8],
-        is_mate: bool,
+        is_read1: bool,
     ) -> HashMap<(SequenceId, Strand), Vec<Anchor>> {
         let mut ref_to_anchors: HashMap<(SequenceId, Strand), Vec<Anchor>> = HashMap::new();
 
@@ -120,7 +120,7 @@ impl Mapper<'_> {
             }
         };
 
-        match (self.library_type, is_mate) {
+        match (self.library_type, is_read1) {
             (LibraryType::Unstranded, _) => {
                 seed(&query, Strand::Forward);
                 seed(&rc_query, Strand::Reverse);
@@ -175,7 +175,7 @@ impl Mapper<'_> {
 
     #[allow(clippy::too_many_arguments)]
     fn calc_align_score(
-        &mut self,
+        &self,
         query: &[u8],
         rev_query: &[u8],
         seq: &[u8],
