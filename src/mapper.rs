@@ -7,7 +7,8 @@ use crate::index::{Index, SequenceId};
 use align::{Aligner, AlignmentConfig};
 use chain::Chain;
 use itertools::Itertools;
-use std::{collections::HashMap, ops::Range};
+use rustc_hash::FxHashMap;
+use std::ops::Range;
 
 #[derive(Debug, Clone, Copy)]
 pub enum LibraryType {
@@ -83,8 +84,8 @@ impl Mapper<'_> {
         query: &[u8],
         rc_query: &[u8],
         is_read1: bool,
-    ) -> HashMap<(SequenceId, Strand), Vec<Anchor>> {
-        let mut ref_to_anchors: HashMap<(SequenceId, Strand), Vec<Anchor>> = HashMap::new();
+    ) -> FxHashMap<(SequenceId, Strand), Vec<Anchor>> {
+        let mut ref_to_anchors: FxHashMap<(SequenceId, Strand), Vec<Anchor>> = FxHashMap::default();
 
         let mut seed = |query: &[u8], strand| {
             for seed_pos in 0..=(query.len() - self.seed_min_len) {
@@ -138,9 +139,9 @@ impl Mapper<'_> {
 
     fn chain_anchors(
         &self,
-        ref_to_anchors: HashMap<(SequenceId, Strand), Vec<Anchor>>,
-    ) -> HashMap<(SequenceId, Strand), Vec<Chain>> {
-        let mut ref_to_chains = HashMap::new();
+        ref_to_anchors: FxHashMap<(SequenceId, Strand), Vec<Anchor>>,
+    ) -> FxHashMap<(SequenceId, Strand), Vec<Chain>> {
+        let mut ref_to_chains = FxHashMap::default();
         let mut best_score = f64::MIN;
         let mut score_threshold = f64::MIN;
 

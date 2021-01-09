@@ -1,6 +1,6 @@
 use super::{Anchor, Mapper, Strand};
 use crate::{index::SequenceId, sequence};
-use std::collections::HashMap;
+use rustc_hash::FxHashMap;
 
 pub struct PairMapping {
     pub seq_id: SequenceId,
@@ -46,7 +46,7 @@ impl Mapper<'_> {
         // match pairs
         let mut best_pair_score = f64::MIN;
         let mut pair_score_threshold = f64::MIN;
-        let mut ref_to_pairs = HashMap::new();
+        let mut ref_pairs = Vec::new();
 
         for ((seq_id, strand), chains1) in &ref_to_chains1 {
             if let Some(chains2) = &ref_to_chains2.get(&(*seq_id, strand.opposite())) {
@@ -72,7 +72,9 @@ impl Mapper<'_> {
                     }
                 }
 
-                ref_to_pairs.insert((seq_id, strand), pairs);
+                if !pairs.is_empty() {
+                    ref_pairs.push((seq_id, strand, pairs));
+                }
             }
         }
 
@@ -89,11 +91,16 @@ impl Mapper<'_> {
         let max_align_score2 = query2.len() as i32 * match_score;
         let align_score_threshold2 = (max_align_score2 as f64 * self.min_score_fraction) as i32;
 
-        let mut anchors_to_scores1: HashMap<(SequenceId, Strand, &[Anchor]), i32> = HashMap::new();
-        let mut anchors_to_scores2: HashMap<(SequenceId, Strand, &[Anchor]), i32> = HashMap::new();
+        let mut anchors_to_scores1: FxHashMap<(SequenceId, Strand, &[Anchor]), i32> =
+            FxHashMap::default();
+        let mut anchors_to_scores2: FxHashMap<(SequenceId, Strand, &[Anchor]), i32> =
+            FxHashMap::default();
 
-        for ((seq_id, strand), pairs) in ref_to_pairs.iter_mut() {
+        for (seq_id, strand, pairs) in ref_pairs.iter_mut() {
             pairs.retain(|pair| pair.0.score + pair.1.score >= pair_score_threshold);
+            if pairs.is_empty() {
+                continue;
+            }
 
             let seq_range = self.index.seq_range(**seq_id);
             let seq = &self.index.seq[seq_range.clone()];
@@ -142,7 +149,7 @@ impl Mapper<'_> {
 
         let mut mappings = Vec::new();
 
-        for ((seq_id, strand), pairs) in ref_to_pairs {
+        for (seq_id, strand, pairs) in ref_pairs {
             let seq_range = self.index.seq_range(*seq_id);
 
             let mut best_mapping = None;

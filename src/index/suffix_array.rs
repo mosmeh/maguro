@@ -22,13 +22,13 @@ impl SuffixArray {
         let lcp = make_lcp_array(text, &array);
         let child = make_child_table(&lcp);
 
-        let bucket_len = 1 << (2 * bucket_width);
+        let buckets_len = 1 << (2 * bucket_width);
         let mut prefix = vec![0; bucket_width];
-        let mut buckets = Vec::with_capacity(bucket_len);
+        let mut buckets = Vec::with_capacity(buckets_len);
 
-        for i in 0..bucket_len {
-            for (bit, x) in prefix.iter_mut().enumerate() {
-                *x = sequence::two_bit_to_code((i >> (2 * bit)) as u8);
+        for idx in 0..buckets_len {
+            for (i, x) in prefix.iter_mut().enumerate() {
+                *x = sequence::two_bit_to_code((idx >> (2 * i)) as u8);
             }
             let range = search_suffix_array(&array, &child, text, &prefix, 0, 0, text.len(), 0)
                 .unwrap_or_default();
@@ -63,7 +63,7 @@ impl SuffixArray {
             return Some(begin..end);
         }
 
-        let store_pos = if self.child[begin] < end as u32 {
+        let store_pos = if self.child[begin] < range.end {
             begin
         } else {
             end - 1
@@ -86,7 +86,6 @@ impl SuffixArray {
     ///
     /// Returns `(suffix array range, match length)`.
     /// If no such match was found, `None` is returned.
-    #[inline]
     pub fn extension_search(
         &self,
         text: &[u8],
@@ -96,25 +95,20 @@ impl SuffixArray {
     ) -> Option<(Range<usize>, usize)> {
         debug_assert!(self.bucket_width <= min_len && min_len <= query.len());
 
-        let query_len = query.len();
-
         let mut idx = 0;
         for (i, x) in query[..self.bucket_width].iter().enumerate() {
             idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * i);
         }
 
         let range = &self.buckets[idx];
-        if range.start == range.end
-            || (min_len == query_len && range.end - range.start > max_hits as u32)
-        {
+        if range.start == range.end {
             return None;
         }
 
+        let mut depth = self.bucket_width;
         let mut begin = range.start as usize;
         let mut end = range.end as usize;
-
-        let mut depth = 0;
-        let mut store_pos = if self.child[begin] < end as u32 {
+        let mut store_pos = if self.child[begin] < range.end {
             begin
         } else {
             end - 1
@@ -134,6 +128,8 @@ impl SuffixArray {
                 return None;
             }
         }
+
+        let query_len = query.len();
 
         while depth < query_len && end - begin > max_hits {
             if !do_one_step(
@@ -188,7 +184,6 @@ fn search_suffix_array(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[inline(always)]
 fn do_one_step(
     array: &[u32],
     child: &[u32],
