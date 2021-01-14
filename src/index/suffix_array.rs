@@ -150,32 +150,18 @@ impl SuffixArray {
         )
     }
 
-    /// Searches shortest (>= `min_len`) match of prefix of `query` to the `text`
-    /// with at most `max_hits` hits.
-    ///
-    /// Returns `(suffix array range, match length)`.
-    /// If no such match was found, `None` is returned.
-    pub fn extension_search(
+    pub fn extension_search_from_range(
         &self,
         text: &[u8],
         query: &[u8],
         min_len: usize,
         max_hits: usize,
+        mut begin: usize,
+        mut end: usize,
     ) -> Option<(Range<usize>, usize)> {
         debug_assert!(self.bucket_width <= min_len && min_len <= query.len());
 
         SEARCH_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
-        let mut idx = 0;
-        for (i, x) in query[..self.bucket_width].iter().enumerate() {
-            idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * i);
-        }
-
-        let mut begin = self.offsets[idx] as usize;
-        let mut end = self.offsets[idx + 1] as usize;
-        if begin == end {
-            return None;
-        }
 
         unsafe {
             equal_range(
@@ -187,6 +173,7 @@ impl SuffixArray {
                 &mut end,
             );
         }
+
         if begin == end {
             return None;
         }
