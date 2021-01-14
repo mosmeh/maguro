@@ -134,7 +134,67 @@ impl SuffixArray {
                 return None;
             }
         }
+        FOUND_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
+        let query_len = query.len();
+
+        while depth < query_len && end - begin > max_hits {
+            if !do_one_step(
+                &self.array,
+                &self.child,
+                text,
+                query,
+                &mut depth,
+                &mut begin,
+                &mut end,
+                &mut store_pos,
+            ) {
+                return None;
+            }
+        }
+
+        if depth == query_len && end - begin > max_hits {
+            None
+        } else {
+            Some((begin..end, depth))
+        }
+    }
+
+    pub fn extension_search_from_range(
+        &self,
+        text: &[u8],
+        query: &[u8],
+        min_len: usize,
+        max_hits: usize,
+        range: &Range<u32>,
+    ) -> Option<(Range<usize>, usize)> {
+        assert!(self.bucket_width <= min_len && min_len <= query.len());
+
+        SEARCH_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
+        let mut depth = self.bucket_width;
+        let mut begin = range.start as usize;
+        let mut end = range.end as usize;
+        let mut store_pos = if self.child[begin] < range.end {
+            begin
+        } else {
+            end - 1
+        };
+
+        while depth < min_len {
+            if !do_one_step(
+                &self.array,
+                &self.child,
+                text,
+                query,
+                &mut depth,
+                &mut begin,
+                &mut end,
+                &mut store_pos,
+            ) {
+                return None;
+            }
+        }
         FOUND_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         let query_len = query.len();
