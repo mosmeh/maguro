@@ -76,7 +76,8 @@ impl Command for StatsCommand {
 
         from_slice!("Suffix array", &index.sa.array);
         from_slice!("Child table", &index.sa.child);
-        from_slice!("Buckets", &index.sa.buckets);
+        from_slice!("Table 1", &index.sa.table1);
+        from_slice!("Table 2", &index.sa.table2);
         table.add_empty_row();
 
         from_bytes!("Total", total_bytes);

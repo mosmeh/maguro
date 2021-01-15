@@ -11,59 +11,185 @@ pub static SEARCH_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::A
 pub struct SuffixArray {
     pub array: Vec<u32>,
     pub child: Vec<u32>,
-    pub buckets: Vec<Range<u32>>,
-    pub bucket_width: usize,
+    pub prefix_len: usize,
+    pub table1: Vec<u32>,
+    pub table2: Vec<Range<u32>>,
 }
 
 impl SuffixArray {
-    pub fn new(text: &[u8], bucket_width: usize) -> Self {
+    pub fn new(text: &[u8], prefix_len: usize, f: f64) -> Self {
         assert!(text.len() <= u32::MAX as usize + 1);
-        assert!(bucket_width * 2 < std::mem::size_of::<usize>() * 8);
+        assert!(prefix_len < 32);
 
         let sa = SA::<i32>::new(text);
         let array: Vec<_> = sa.sarray.into_iter().map(|x| x as u32).collect();
 
         let lcp = make_lcp_array(text, &array);
         let child = make_child_table(&lcp);
+        eprintln!("Built SA");
 
-        let buckets_len = 1 << (2 * bucket_width);
-        let mut prefix = vec![0; bucket_width];
-        let mut buckets = Vec::with_capacity(buckets_len);
+        let table1_len = 1 << (2 * prefix_len);
+        let mut prefix = vec![0; prefix_len];
+        let mut table1 = Vec::with_capacity(table1_len);
+        let mut table2 = Vec::new();
 
-        for idx in 0..buckets_len {
+        let mut num_found = 0;
+        let mut hist_w = std::collections::HashMap::new();
+        let mut min_occ = usize::MAX;
+        let mut max_occ = usize::MIN;
+        let mut sum_occ = 0;
+        let mut theo_reduction_vl = 0.0;
+        let mut real_reduction_vl = 0.0;
+        let mut non_empty_entries = 0;
+        for idx in 0..table1_len {
             for (i, x) in prefix.iter_mut().enumerate() {
                 *x = sequence::two_bit_to_code((idx >> (2 * i)) as u8);
             }
-            let range = search_suffix_array(&array, &child, text, &prefix, 0, 0, text.len(), 0)
-                .unwrap_or_default();
-            buckets.push(range.start as u32..range.end as u32);
+            if let Some(range) =
+                search_suffix_array(&array, &child, text, &prefix, 0, 0, text.len(), 0)
+            {
+                num_found += 1;
+                let occ = range.end - range.start;
+                min_occ = min_occ.min(occ);
+                max_occ = max_occ.max(occ);
+                sum_occ += occ;
+                theo_reduction_vl += occ as f64 * (prefix_len as f64 + (occ as f64).log(4.0));
+
+                let freq = (range.end - range.start) as f64 * f;
+                let w = (freq.log(4.0).max(0.0) as usize).min(31);
+                real_reduction_vl += occ as f64 * (prefix_len as f64 + w as f64);
+                hist_w.entry(w).and_modify(|x| *x += 1).or_insert(1);
+                table1.push(table2.len() as u32);
+                if w == 0 {
+                    table2.push(range.start as u32..range.end as u32);
+                    non_empty_entries += 1;
+                } else {
+                    let mut body = vec![0; prefix_len + w];
+                    for offset in 0..(1 << (2 * w)) {
+                        for (i, x) in body.iter_mut().skip(prefix_len).enumerate() {
+                            *x = sequence::two_bit_to_code((offset >> (2 * i)) as u8);
+                        }
+                        let range2 = search_suffix_array(
+                            &array,
+                            &child,
+                            text,
+                            &body,
+                            prefix_len,
+                            range.start,
+                            range.end,
+                            if child[range.start as usize] < range.end as u32 {
+                                range.start
+                            } else {
+                                range.end - 1
+                            },
+                        )
+                        .unwrap_or_default();
+                        table2.push(range2.start as u32..range2.end as u32);
+                        if range2.end > range2.start {
+                            non_empty_entries += 1;
+                        }
+                    }
+                }
+            } else {
+                min_occ = 0;
+                hist_w.entry(0).and_modify(|x| *x += 1).or_insert(1);
+                table1.push(table2.len() as u32);
+            }
         }
+
+        eprintln!("k={}, f={}", prefix_len, f);
+        eprintln!(
+            "Prefix counts: min={} max={} avg={:.2}",
+            min_occ,
+            max_occ,
+            sum_occ as f64 / table1_len as f64
+        );
+        eprintln!("Reduction:");
+        theo_reduction_vl /= sum_occ as f64;
+        eprintln!(
+            "Theo ord={:.4} vl={:.4}",
+            (text.len() as f64).log(4.0),
+            theo_reduction_vl
+        );
+        real_reduction_vl /= sum_occ as f64;
+        eprintln!(
+            "Real ord={:.4} vl={:.4}",
+            (text.len() as f64 * f).log(4.0).floor(),
+            real_reduction_vl
+        );
+        eprintln!(
+            "Found {} / {} prefixes ({:.2}%)",
+            num_found,
+            table1.len(),
+            num_found as f64 * 100.0 / table1.len() as f64
+        );
+        eprintln!("Table 2 summary:");
+        use itertools::Itertools;
+        for (w, count) in hist_w.iter().sorted_by(|(a, _), (b, _)| a.cmp(&b)) {
+            eprintln!("w={}\tcount={}", w, count);
+        }
+        eprintln!(
+            "Non-empty: {} / {} ({:.2}%)",
+            non_empty_entries,
+            table2.len(),
+            non_empty_entries as f64 * 100.0 / table2.len() as f64
+        );
+        eprintln!(
+            "Table1 len = {}\t{}B\t{:.2}KiB",
+            table1.len(),
+            table1.len() * 4,
+            table1.len() as f64 * 4.0 / 1024.0
+        );
+        eprintln!(
+            "Table2 len = {}\t{}B\t{:.2}MiB",
+            table2.len(),
+            table2.len() * 8,
+            table2.len() as f64 * 8.0 / 1024.0 / 1024.0
+        );
+
+        table1.push(table2.len() as u32);
 
         Self {
             array,
             child,
-            buckets,
-            bucket_width,
+            prefix_len,
+            table1,
+            table2,
         }
     }
 
     pub fn search(&self, text: &[u8], query: &[u8]) -> Option<Range<usize>> {
-        debug_assert!(self.bucket_width <= query.len());
+        debug_assert!(self.prefix_len <= query.len());
 
-        let mut idx = 0;
-        for (i, x) in query[..self.bucket_width].iter().enumerate() {
-            idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * i);
+        let mut start_idx = 0;
+        for (i, x) in query[..self.prefix_len].iter().enumerate() {
+            start_idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * i);
         }
 
-        let range = &self.buckets[idx];
+        let a = &self.table1[start_idx];
+        let b = &self.table1[start_idx + 1];
+        if a == b {
+            return None;
+        }
+
+        let w = ((b - a).trailing_zeros() / 2) as usize;
+        debug_assert!(self.prefix_len + w <= query.len());
+
+        let mut offset = 0;
+        for (i, x) in query[self.prefix_len..][..w].iter().enumerate() {
+            offset |= (sequence::code_to_two_bit(*x) as usize) << (2 * i);
+        }
+
+        let range = &self.table2[*a as usize..][offset];
         if range.start == range.end {
             return None;
         }
 
+        let depth = self.prefix_len + w;
         let begin = range.start as usize;
         let end = range.end as usize;
 
-        if query.len() == self.bucket_width {
+        if query.len() == depth {
             return Some(begin..end);
         }
 
@@ -78,7 +204,7 @@ impl SuffixArray {
             &self.child,
             text,
             query,
-            self.bucket_width,
+            depth,
             begin,
             end,
             store_pos,
@@ -97,21 +223,35 @@ impl SuffixArray {
         min_len: usize,
         max_hits: usize,
     ) -> Option<(Range<usize>, usize)> {
-        debug_assert!(self.bucket_width <= min_len && min_len <= query.len());
+        debug_assert!(self.prefix_len <= min_len && min_len <= query.len());
 
         SEARCH_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         let mut idx = 0;
-        for (i, x) in query[..self.bucket_width].iter().enumerate() {
+        for (i, x) in query[..self.prefix_len].iter().enumerate() {
             idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * i);
         }
 
-        let range = &self.buckets[idx];
+        let a = &self.table1[idx];
+        let b = &self.table1[idx + 1];
+        if a == b {
+            return None;
+        }
+
+        let w = ((b - a).trailing_zeros() / 2) as usize;
+        debug_assert!(self.prefix_len + w <= min_len);
+
+        let mut offset = 0;
+        for (i, x) in query[self.prefix_len..][..w].iter().enumerate() {
+            offset |= (sequence::code_to_two_bit(*x) as usize) << (2 * i);
+        }
+
+        let range = &self.table2[*a as usize..][offset];
         if range.start == range.end {
             return None;
         }
 
-        let mut depth = self.bucket_width;
+        let mut depth = self.prefix_len + w;
         let mut begin = range.start as usize;
         let mut end = range.end as usize;
         let mut store_pos = if self.child[begin] < range.end {
@@ -319,7 +459,7 @@ mod tests {
     fn check_search(text: &[u8], query: &[u8], expected: Option<Vec<usize>>) {
         let text = sequence::encode(text);
         let query = sequence::encode(query);
-        let sa = SuffixArray::new(&text, 1);
+        let sa = SuffixArray::new(&text, 1, 2.0);
         let got: Option<Vec<usize>> = sa
             .search(&text, &query)
             .map(|range| range.map(|i| sa.array[i] as usize).sorted().collect());
@@ -360,7 +500,7 @@ mod tests {
     ) {
         let text = sequence::encode(text);
         let query = sequence::encode(query);
-        let sa = SuffixArray::new(&text, 2);
+        let sa = SuffixArray::new(&text, 2, 2.0);
 
         let got: Option<(Vec<_>, usize)> = sa
             .extension_search(&text, &query, min_len, max_hits)

@@ -228,7 +228,7 @@ mod tests {
         }
 
         let cursor = std::io::Cursor::new(&fasta);
-        let index = IndexBuilder::new(cursor).bucket_width(2).build().unwrap();
+        let index = IndexBuilder::new(cursor).prefix_len(2).build().unwrap();
         let mapper = MapperBuilder::new(&index)
             .max_fragment_len(15)
             .seed_min_len(3)

@@ -58,7 +58,8 @@ impl Index {
 
 pub struct IndexBuilder<R: io::Read> {
     reader: fasta::Reader<R>,
-    bucket_width: usize,
+    prefix_len: usize,
+    f: f64,
     header_sep: Option<String>,
 }
 
@@ -72,7 +73,8 @@ impl<R: io::Read> IndexBuilder<R> {
     fn from_reader(reader: fasta::Reader<R>) -> Self {
         Self {
             reader,
-            bucket_width: 8,
+            prefix_len: 5,
+            f: 1.0,
             header_sep: None,
         }
     }
@@ -81,8 +83,13 @@ impl<R: io::Read> IndexBuilder<R> {
         Self::from_reader(fasta::Reader::new(reader))
     }
 
-    pub fn bucket_width(mut self, bucket_width: usize) -> Self {
-        self.bucket_width = bucket_width;
+    pub fn prefix_len(mut self, prefix_len: usize) -> Self {
+        self.prefix_len = prefix_len;
+        self
+    }
+
+    pub fn f(mut self, f: f64) -> Self {
+        self.f = f;
         self
     }
 
@@ -122,7 +129,7 @@ impl<R: io::Read> IndexBuilder<R> {
             *bvec.get_mut(end - 1).unwrap() = true;
         }
 
-        let sa = SuffixArray::new(&seq, self.bucket_width);
+        let sa = SuffixArray::new(&seq, self.prefix_len, self.f);
         Ok(Index {
             seq,
             ends,
