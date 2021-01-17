@@ -1,4 +1,6 @@
+use super::Rank9b;
 use crate::sequence;
+use bitvec::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 use sufsort_rs::sufsort::SA;
@@ -13,6 +15,7 @@ pub struct SuffixArray {
     pub child: Vec<u32>,
     pub buckets: Vec<Range<u32>>,
     pub bucket_width: usize,
+    pub rank_dict: Rank9b,
 }
 
 impl SuffixArray {
@@ -29,21 +32,29 @@ impl SuffixArray {
         let buckets_len = 1 << (2 * bucket_width);
         let mut prefix = vec![0; bucket_width];
         let mut buckets = Vec::with_capacity(buckets_len);
+        let mut bvec: BitVec<Lsb0, u64> = BitVec::new();
 
         for idx in 0..buckets_len {
             for (i, x) in prefix.iter_mut().enumerate() {
                 *x = sequence::two_bit_to_code((idx >> (2 * i)) as u8);
             }
-            let range = search_suffix_array(&array, &child, text, &prefix, 0, 0, text.len(), 0)
-                .unwrap_or_default();
-            buckets.push(range.start as u32..range.end as u32);
+            if let Some(range) =
+                search_suffix_array(&array, &child, text, &prefix, 0, 0, text.len(), 0)
+            {
+                buckets.push(range.start as u32..range.end as u32);
+                bvec.push(true);
+            } else {
+                bvec.push(false);
+            }
         }
+        bvec.push(true);
 
         Self {
             array,
             child,
             buckets,
             bucket_width,
+            rank_dict: Rank9b::from_bit_vec(bvec),
         }
     }
 
@@ -55,10 +66,10 @@ impl SuffixArray {
             idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * i);
         }
 
-        let range = &self.buckets[idx];
-        if range.start == range.end {
+        if !self.rank_dict.bit(idx) {
             return None;
         }
+        let range = &self.buckets[(self.rank_dict.rank(idx + 1) - 1) as usize];
 
         let begin = range.start as usize;
         let end = range.end as usize;
@@ -106,10 +117,10 @@ impl SuffixArray {
             idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * i);
         }
 
-        let range = &self.buckets[idx];
-        if range.start == range.end {
+        if !self.rank_dict.bit(idx) {
             return None;
         }
+        let range = &self.buckets[(self.rank_dict.rank(idx + 1) - 1) as usize];
 
         let mut depth = self.bucket_width;
         let mut begin = range.start as usize;
