@@ -1,7 +1,7 @@
 use crate::sequence;
-use bio::data_structures::suffix_array::suffix_array;
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
+use sufsort_rs::sufsort::SA;
 
 #[derive(Serialize, Deserialize)]
 pub struct SuffixArray {
@@ -16,8 +16,8 @@ impl SuffixArray {
         assert!(text.len() <= u32::MAX as usize + 1);
         assert!(bucket_width * 2 < std::mem::size_of::<usize>() * 8);
 
-        let array = suffix_array(text);
-        let array: Vec<_> = array.into_iter().map(|x| x as u32).collect();
+        let sa = SA::<i32>::new(text);
+        let array: Vec<_> = sa.sarray.into_iter().map(|x| x as u32).collect();
 
         let lcp = make_lcp_array(text, &array);
         let child = make_child_table(&lcp);
@@ -184,6 +184,7 @@ fn search_suffix_array(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[inline(always)]
 fn do_one_step(
     array: &[u32],
     child: &[u32],
@@ -298,7 +299,7 @@ mod tests {
     #[test]
     fn lcp_array_and_child_table() {
         let text = b"gcctagccta";
-        let sa = &[4, 9, 1, 6, 2, 7, 0, 5, 3, 8, 10];
+        let sa = &[4, 9, 1, 6, 2, 7, 0, 5, 3, 8];
         let lcp = make_lcp_array(text, sa);
         let child = make_child_table(&lcp);
         assert_eq!(lcp, &[0, 1, 0, 4, 1, 3, 0, 5, 0, 2]);
@@ -336,6 +337,8 @@ mod tests {
             b"atat",
             Some(vec![0, 2, 10, 12, 20, 22]),
         );
+        check_search(b"ca$cc$cg$", b"cc", Some(vec![3]));
+        check_search(b"taat$tata$tcac$tcag$", b"taa", Some(vec![0]));
     }
 
     fn check_extension_search(
