@@ -6,11 +6,11 @@ use anyhow::Result;
 use maguro::{
     index::Index,
     mapper::{align::AlignmentConfig, LibraryType, Mapper, MapperBuilder},
-    sam, sequence,
+    sequence,
 };
 use std::{
     fs::File,
-    io::{self, BufReader, BufWriter, Write},
+    io::{BufReader, Write},
     path::PathBuf,
     time::Instant,
 };
@@ -82,13 +82,6 @@ impl Command for MapCommand {
             .alignment_config(self.alignment_config.clone())
             .build();
 
-        {
-            let out = io::stdout();
-            let mut out = BufWriter::new(out.lock());
-            sam::write_header(&mut out, &self.sam_pg, &index)?;
-            out.flush()?;
-        }
-
         let start_time = Instant::now();
 
         if self.threads > 1 {
@@ -99,84 +92,49 @@ impl Command for MapCommand {
 
         eprintln!("Elapsed {}ms", start_time.elapsed().as_millis());
         eprintln!("Finished");
+        eprintln!(
+            "#do_one_step = {}",
+            maguro::index::suffix_array::STEP_COUNTER.load(std::sync::atomic::Ordering::Relaxed)
+        );
+        let found =
+            maguro::index::suffix_array::FOUND_COUNTER.load(std::sync::atomic::Ordering::Relaxed);
+        let search =
+            maguro::index::suffix_array::SEARCH_COUNTER.load(std::sync::atomic::Ordering::Relaxed);
+        eprintln!(
+            "Found {} / {} ({:.2}%)",
+            found,
+            search,
+            found as f64 * 100.0 / search as f64
+        );
 
         Ok(())
     }
 }
 
 fn map_single<'a, W: Write>(
-    mut out: W,
-    index: &Index,
+    _out: W,
+    _index: &Index,
     mapper: &Mapper<'a>,
-    qname: &[u8],
+    _qname: &[u8],
     seq: &[u8],
 ) -> Result<bool> {
     let encoded_seq = sequence::encode(&seq);
 
-    let mut mappings = mapper.map_single(&encoded_seq);
-    if mappings.is_empty() {
-        sam::write_unmapped_single(&mut out, qname, seq)?;
-        Ok(false)
-    } else {
-        mappings.sort_by(|a, b| b.score.cmp(&a.score));
-
-        let mut secondary = false;
-        let mut rc_query_cache = None;
-
-        for mapping in mappings {
-            sam::write_mapping_single(
-                &mut out,
-                &index,
-                qname,
-                seq,
-                &mapping,
-                secondary,
-                &mut rc_query_cache,
-            )?;
-            secondary = true;
-        }
-
-        Ok(true)
-    }
+    let mappings = mapper.map_single(&encoded_seq);
+    Ok(!mappings.is_empty())
 }
 
 fn map_pair<'a, W: Write>(
-    mut out: W,
-    index: &Index,
+    _out: W,
+    _index: &Index,
     mapper: &Mapper<'a>,
-    qname: &[u8],
+    _qname: &[u8],
     seq1: &[u8],
     seq2: &[u8],
 ) -> Result<bool> {
     let encoded_seq1 = sequence::encode(&seq1);
     let encoded_seq2 = sequence::encode(&seq2);
 
-    let mut mappings = mapper.map_pair(&encoded_seq1, &encoded_seq2);
-    if mappings.is_empty() {
-        sam::write_unmapped_pair(&mut out, qname, seq1, seq2)?;
-        Ok(false)
-    } else {
-        mappings.sort_by(|a, b| (b.score1 + b.score2).cmp(&(a.score1 + a.score2)));
-
-        let mut secondary = false;
-        let mut rc_query_cache1 = None;
-        let mut rc_query_cache2 = None;
-
-        for mapping in mappings {
-            sam::write_mapping_pair(
-                &mut out,
-                &index,
-                qname,
-                seq1,
-                seq2,
-                &mapping,
-                secondary,
-                &mut rc_query_cache1,
-                &mut rc_query_cache2,
-            )?;
-            secondary = true;
-        }
-
-        Ok(true)
-    }
+    let mappings = mapper.map_pair(&encoded_seq1, &encoded_seq2);
+    Ok(!mappings.is_empty())
 }

@@ -23,61 +23,14 @@ impl Mapper<'_> {
             return Vec::new();
         }
 
-        // chaining
-        let ref_to_chains = self.chain_anchors(ref_to_anchors);
-        if ref_to_chains.is_empty() {
-            return Vec::new();
-        }
-
-        // base-to-base alignment
-        let rev_query = sequence::reverse(query);
-        let compl_query = sequence::complement(query);
-
-        let match_score = self.aligner.config().match_score as i32;
-        let max_align_score = query.len() as i32 * match_score;
-        let align_score_threshold = (max_align_score as f64 * self.min_score_fraction) as i32;
-
         let mut mappings = Vec::new();
-
-        for ((seq_id, strand), chains) in ref_to_chains {
-            let seq_range = self.index.seq_range(seq_id);
-            let seq = &self.index.seq[seq_range.clone()];
-            let rev_seq = sequence::reverse(seq);
-
-            let (align_query, rev_align_query): (&[u8], &[u8]) = match strand {
-                Strand::Forward => (query, &rev_query),
-                Strand::Reverse => (&rc_query, &compl_query),
-            };
-
-            let mut best_mapping = None;
-            let mut best_score = align_score_threshold;
-
-            for chain in chains {
-                let score = self.calc_align_score(
-                    align_query,
-                    &rev_align_query,
-                    seq,
-                    &rev_seq,
-                    &seq_range,
-                    &chain,
-                    best_score,
-                );
-                if let Some(score) = score {
-                    let first_anchor = &chain.anchors[0];
-                    best_mapping = Some(SingleMapping {
-                        seq_id,
-                        pos: (first_anchor.ref_pos - seq_range.start)
-                            .saturating_sub(first_anchor.query_pos),
-                        strand,
-                        score,
-                    });
-                    best_score = score;
-                }
-            }
-
-            if let Some(mapping) = best_mapping {
-                mappings.push(mapping);
-            }
+        for ((seq_id, strand), anchors) in ref_to_anchors {
+            mappings.push(SingleMapping {
+                seq_id,
+                pos: anchors[0].ref_pos,
+                strand,
+                score: 0,
+            });
         }
 
         mappings
