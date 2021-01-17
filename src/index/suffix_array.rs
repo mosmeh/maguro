@@ -3,10 +3,6 @@ use serde::{Deserialize, Serialize};
 use std::ops::Range;
 use sufsort_rs::sufsort::SA;
 
-pub static STEP_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-pub static FOUND_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-pub static SEARCH_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
-
 #[derive(Serialize, Deserialize)]
 pub struct SuffixArray {
     pub array: Vec<u32>,
@@ -99,8 +95,6 @@ impl SuffixArray {
     ) -> Option<(Range<usize>, usize)> {
         debug_assert!(self.bucket_width <= min_len && min_len <= query.len());
 
-        SEARCH_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
         let mut idx = 0;
         for (i, x) in query[..self.bucket_width].iter().enumerate() {
             idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * i);
@@ -134,7 +128,6 @@ impl SuffixArray {
                 return None;
             }
         }
-        FOUND_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         let query_len = query.len();
 
@@ -170,8 +163,6 @@ impl SuffixArray {
     ) -> Option<(Range<usize>, usize)> {
         assert!(self.bucket_width <= min_len && min_len <= query.len());
 
-        SEARCH_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
         let mut depth = self.bucket_width;
         let mut begin = range.start as usize;
         let mut end = range.end as usize;
@@ -195,7 +186,6 @@ impl SuffixArray {
                 return None;
             }
         }
-        FOUND_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         let query_len = query.len();
 
@@ -263,8 +253,6 @@ fn do_one_step(
     end: &mut usize,
     store_pos: &mut usize,
 ) -> bool {
-    STEP_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
-
     let q = query[*depth];
     let mut b = text[array[*begin] as usize + *depth];
     if q < b {
