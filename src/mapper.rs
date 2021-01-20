@@ -97,7 +97,7 @@ impl Mapper<'_> {
                 );
                 if let Some((range, len)) = result {
                     for i in range {
-                        let pos = self.index.sa.array[i] as usize;
+                        let pos = self.index.sa.ssa[i] as usize;
                         let id = self.index.seq_id_from_pos(pos);
 
                         ref_to_anchors

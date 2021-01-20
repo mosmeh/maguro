@@ -474,6 +474,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "histogram"
+version = "0.6.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "12cb882ccb290b8646e554b157ab0b71e64e8d5bef775cd66b6531e52d302669"
+
+[[package]]
 name = "indexmap"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -567,6 +573,7 @@ dependencies = [
  "bitvec",
  "bstr",
  "crossbeam-channel",
+ "histogram",
  "itertools 0.10.0",
  "jemallocator",
  "ksw2",
@@ -578,6 +585,7 @@ dependencies = [
  "size",
  "structopt",
  "sufsort-rs",
+ "xxhash-rust",
 ]
 
 [[package]]
@@ -1232,3 +1240,9 @@ name = "wyz"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85e60b0d1b5f99db2556934e21937020776a5d31520bf169e851ac44e6420214"
+
+[[package]]
+name = "xxhash-rust"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "94b92e16d90ed01ad0736f1123137630b5bcef5f5bafee62468283e027c1c85d"
