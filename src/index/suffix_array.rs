@@ -1,4 +1,5 @@
 use crate::sequence;
+use bitvec::prelude::*;
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 use sufsort_rs::sufsort::SA;
@@ -13,15 +14,29 @@ pub struct SuffixArray {
     pub child: Vec<u32>,
     pub buckets: Vec<Range<u32>>,
     pub bucket_width: usize,
+    pub filter: Vec<u64>,
+    pub filter_width: usize,
 }
 
 impl SuffixArray {
-    pub fn new(text: &[u8], bucket_width: usize) -> Self {
+    pub fn new(text: &[u8], bucket_width: usize, filter_width: usize) -> Self {
         assert!(text.len() <= u32::MAX as usize + 1);
         assert!(bucket_width * 2 < std::mem::size_of::<usize>() * 8);
 
         let sa = SA::<i32>::new(text);
         let array: Vec<_> = sa.sarray.into_iter().map(|x| x as u32).collect();
+        let mut bvec: BitVec<Lsb0, u64> = BitVec::new();
+        bvec.resize(1 << (2 * filter_width), false);
+        for x in &array {
+            if *x as usize + filter_width > text.len() {
+                continue;
+            }
+            let mut idx = 0;
+            for (i, x) in text[*x as usize..][..filter_width].iter().enumerate() {
+                idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * i);
+            }
+            *bvec.get_mut(idx).unwrap() = true;
+        }
 
         let lcp = make_lcp_array(text, &array);
         let child = make_child_table(&lcp);
@@ -44,6 +59,8 @@ impl SuffixArray {
             child,
             buckets,
             bucket_width,
+            filter: bvec.into_vec(),
+            filter_width,
         }
     }
 

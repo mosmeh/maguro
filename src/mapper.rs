@@ -87,7 +87,7 @@ impl Mapper<'_> {
     ) -> FxHashMap<(SequenceId, Strand), Vec<Anchor>> {
         let mut ref_to_anchors: FxHashMap<(SequenceId, Strand), Vec<Anchor>> = FxHashMap::default();
 
-        let bw = self.index.sa.bucket_width;
+        let bw = self.index.sa.filter_width;
         let mask = (1 << (2 * bw)) - 1;
 
         let mut seed = |query: &[u8], strand| {
@@ -101,19 +101,17 @@ impl Mapper<'_> {
             for seed_pos in (0..=(query.len() - bw)).rev() {
                 idx |= crate::sequence::code_to_two_bit(query[seed_pos]) as usize;
 
-                let range = &self.index.sa.buckets[idx];
-                if range.start < range.end {
+                if self.index.sa.filter[idx / 64] & (1 << (idx % 64)) != 0 {
                     l += 1;
 
                     if l + bw > self.seed_min_len {
                         debug_assert!(query[seed_pos..].len() >= self.seed_min_len);
 
-                        let result = self.index.sa.extension_search_from_range(
+                        let result = self.index.sa.extension_search(
                             &self.index.seq,
                             &query[seed_pos..],
                             self.seed_min_len,
                             self.seed_max_hits,
-                            &range,
                         );
                         if let Some((range, len)) = result {
                             for i in range {
