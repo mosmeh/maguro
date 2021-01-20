@@ -19,7 +19,7 @@ impl Command for StatsCommand {
             bincode::deserialize_from(reader)?
         };
 
-        let num_seqs = index.num_seqs();
+        /*let num_seqs = index.num_seqs();
         let mut min_len = usize::MAX;
         let mut max_len = usize::MIN;
         let mut sum_len = 0;
@@ -74,14 +74,67 @@ impl Command for StatsCommand {
         from_bytes!("Rank dictionary", index.rank_dict.size_bytes());
         table.add_empty_row();
 
-        from_slice!("Suffix array", &index.sa.array);
+        from_slice!("Suffix array", &index.sa.ssa);
         from_slice!("Child table", &index.sa.child);
-        from_slice!("Buckets", &index.sa.buckets);
+        from_slice!("Offsets", &index.sa.offsets);
         table.add_empty_row();
 
         from_bytes!("Total", total_bytes);
 
-        table.printstd();
+        table.printstd();*/
+
+        let mut non_zero = 0;
+        for i in 0..(index.sa.offsets.len() - 1) {
+            let len = index.sa.offsets[i + 1] - index.sa.offsets[i];
+            if len > 0 {
+                non_zero += 1;
+            }
+        }
+
+        let mut kmers = std::collections::HashSet::new();
+        for i in 0..=(index.seq.len() - index.sa.k) {
+            let kmer = &index.seq[i..][..index.sa.k];
+            if !kmer.iter().any(|x| *x == maguro::sequence::DUMMY_CODE) {
+                kmers.insert(kmer);
+            }
+        }
+
+        let mut counts = vec![0; index.sa.offsets.len() - 1];
+        for kmer in &kmers {
+            use xxhash_rust::xxh32::xxh32;
+            let hash = xxh32(kmer, 0) as usize & index.sa.mask;
+            counts[hash] += 1;
+        }
+        let mut collision = 0;
+        for count in counts {
+            if count > 1 {
+                collision += count;
+            }
+        }
+
+        let mut hist = histogram::Config::new().precision(5).build().unwrap();
+        for i in 0..(index.sa.offsets.len() - 1) {
+            let len = index.sa.offsets[i + 1] - index.sa.offsets[i];
+            hist.increment(len as u64).unwrap();
+        }
+
+        // k buckets kmers util_count coll_count util coll max p50 p90 p99 p999 stddev
+        println!(
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            index.sa.k,
+            index.sa.offsets.len() - 1,
+            kmers.len(),
+            non_zero,
+            collision,
+            non_zero as f64 * 100.0 / (index.sa.offsets.len() - 1) as f64,
+            collision as f64 * 100.0 / kmers.len() as f64,
+            hist.maximum().unwrap(),
+            hist.percentile(50.0).unwrap(),
+            hist.percentile(90.0).unwrap(),
+            hist.percentile(99.0).unwrap(),
+            hist.percentile(99.9).unwrap(),
+            hist.stddev().unwrap(),
+        );
 
         Ok(())
     }
