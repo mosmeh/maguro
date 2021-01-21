@@ -111,47 +111,43 @@ impl SuffixArray {
             return None;
         }
 
-        let mut depth = self.bucket_width;
         let mut begin = range.start as usize;
         let mut end = range.end as usize;
-        let mut store_pos = if self.child[begin] < range.end {
-            begin
-        } else {
-            end - 1
-        };
 
-        while depth < min_len {
-            if !do_one_step(
+        unsafe {
+            equal_range(
                 &self.array,
-                &self.child,
-                text,
-                query,
-                &mut depth,
+                text.as_ptr().add(self.bucket_width),
+                query.as_ptr().add(self.bucket_width),
+                query.as_ptr().add(min_len),
                 &mut begin,
                 &mut end,
-                &mut store_pos,
-            ) {
-                return None;
-            }
+            );
+        }
+        if begin == end {
+            return None;
         }
 
         FOUND_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
+        let mut depth = min_len;
         let query_len = query.len();
 
         while depth < query_len && end - begin > max_hits {
-            if !do_one_step(
-                &self.array,
-                &self.child,
-                text,
-                query,
-                &mut depth,
-                &mut begin,
-                &mut end,
-                &mut store_pos,
-            ) {
+            unsafe {
+                equal_range(
+                    &self.array,
+                    text.as_ptr().add(depth),
+                    query.as_ptr().add(depth),
+                    query.as_ptr().add(depth + 1),
+                    &mut begin,
+                    &mut end,
+                );
+            }
+            if begin == end {
                 return None;
             }
+            depth += 1;
         }
 
         if depth == query_len && end - begin > max_hits {
@@ -160,6 +156,121 @@ impl SuffixArray {
             Some((begin..end, depth))
         }
     }
+}
+
+unsafe fn equal_range(
+    sa: &[u32],
+    text_base: *const u8,
+    query_begin: *const u8,
+    query_end: *const u8,
+    begin: &mut usize,
+    end: &mut usize,
+) {
+    let mut q_begin = query_begin;
+    let mut q_end = q_begin;
+    let mut t_begin = text_base;
+    let mut t_end = t_begin;
+
+    while begin < end {
+        let mid = *begin + (*end as isize - *begin as isize) as usize / 2;
+        let offset = sa[mid] as usize;
+        let mut q;
+        let mut t;
+        if q_begin < q_end {
+            q = q_begin;
+            t = t_begin.add(offset);
+        } else {
+            q = q_end;
+            t = t_end.add(offset);
+        }
+        let mut x;
+        let mut y;
+        loop {
+            x = *t;
+            y = *q;
+            if x != y {
+                break;
+            };
+            q = q.add(1);
+            if q == query_end {
+                *begin = lower_bound(sa, t_begin, q_begin, query_end, *begin, mid);
+                *end = upper_bound(sa, t_end, q_end, query_end, mid + 1, *end);
+                return;
+            }
+            t = t.add(1);
+        }
+        if x < y {
+            *begin = mid + 1;
+            q_begin = q;
+            t_begin = t.sub(offset);
+        } else {
+            *end = mid;
+            q_end = q;
+            t_end = t.sub(offset);
+        }
+    }
+}
+
+unsafe fn lower_bound(
+    sa: &[u32],
+    mut text_base: *const u8,
+    mut query_begin: *const u8,
+    query_end: *const u8,
+    mut begin: usize,
+    mut end: usize,
+) -> usize {
+    while begin < end {
+        let mid = begin + (end - begin) / 2;
+        let offset = sa[mid];
+        let mut t = text_base.offset(offset as isize);
+        let mut q = query_begin;
+        loop {
+            if *t < *q {
+                begin = mid + 1;
+                query_begin = q;
+                text_base = t.sub(offset as usize);
+                break;
+            }
+            q = q.add(1);
+            if q == query_end {
+                end = mid;
+                break;
+            }
+            t = t.add(1);
+        }
+    }
+    begin
+}
+
+unsafe fn upper_bound(
+    sa: &[u32],
+    mut text_base: *const u8,
+    mut query_begin: *const u8,
+    query_end: *const u8,
+    mut begin: usize,
+    mut end: usize,
+) -> usize {
+    while begin < end {
+        let mid = begin + (end - begin) / 2;
+        let offset = sa[mid];
+        let mut t = text_base.offset(offset as isize);
+        let mut q = query_begin;
+        loop {
+            if *t > *q {
+                end = mid;
+                query_begin = q;
+                text_base = t.sub(offset as usize);
+                break;
+            }
+            q = q.add(1);
+            if q == query_end {
+                begin = mid + 1;
+                break;
+            }
+            t = t.add(1);
+        }
+    }
+    end
 }
 
 #[allow(clippy::too_many_arguments)]
