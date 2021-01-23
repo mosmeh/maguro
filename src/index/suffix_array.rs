@@ -11,7 +11,7 @@ pub static SEARCH_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::A
 pub struct SuffixArray {
     pub array: Vec<u32>,
     pub child: Vec<u32>,
-    pub buckets: Vec<Range<u32>>,
+    pub offsets: Vec<u32>,
     pub bucket_width: usize,
 }
 
@@ -24,25 +24,92 @@ impl SuffixArray {
         let array: Vec<_> = sa.sarray.into_iter().map(|x| x as u32).collect();
 
         let lcp = make_lcp_array(text, &array);
-        let child = make_child_table(&lcp);
 
         let buckets_len = 1 << (2 * bucket_width);
-        let mut prefix = vec![0; bucket_width];
-        let mut buckets = Vec::with_capacity(buckets_len);
-
-        for idx in 0..buckets_len {
-            for (i, x) in prefix.iter_mut().enumerate() {
-                *x = sequence::two_bit_to_code((idx >> (2 * i)) as u8);
+        let mut counts = vec![0u32; buckets_len];
+        for i in 0..=(text.len() - bucket_width) {
+            let seq = &text[i..i + bucket_width];
+            if seq.iter().any(|x| *x == 0 || *x == sequence::DUMMY_CODE) {
+                continue;
             }
-            let range = search_suffix_array(&array, &child, text, &prefix, 0, 0, text.len(), 0)
-                .unwrap_or_default();
-            buckets.push(range.start as u32..range.end as u32);
+            let mut idx = 0;
+            for (j, x) in seq.iter().enumerate() {
+                idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * j);
+            }
+            counts[idx] += 1;
+        }
+
+        let mut cum_sum = 0;
+        for count in counts.iter_mut() {
+            let x = *count;
+            *count = cum_sum;
+            cum_sum += x;
+        }
+        counts.push(cum_sum);
+
+        let offsets = counts;
+
+        let mut pos = offsets.clone();
+        let mut ssa = vec![0; cum_sum as usize];
+        let mut slcp = vec![0; ssa.len()];
+        let mut idx = usize::MAX;
+        let len = text.len() as u32;
+        for (i, s) in array.iter().enumerate() {
+            if *s as usize + bucket_width > text.len() {
+                continue;
+            }
+            let seq = &text[*s as usize..][..bucket_width];
+            if seq.iter().any(|x| *x == 0 || *x == sequence::DUMMY_CODE) {
+                continue;
+            }
+            if lcp[i] >= bucket_width as u32 {
+                if idx == usize::MAX {
+                    idx = 0;
+                    for (j, x) in seq.iter().enumerate() {
+                        idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * j);
+                    }
+                }
+                let p = pos[idx] as usize;
+                ssa[p] = *s;
+                slcp[p] = lcp[i];
+                pos[idx] += 1;
+            } else {
+                idx = 0;
+                for (j, x) in seq.iter().enumerate() {
+                    idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * j);
+                }
+                let p = pos[idx] as usize;
+                ssa[p] = *s;
+                slcp[p] = if p as u32 > offsets[idx] {
+                    let prev = ssa[p - 1];
+                    let mut l = 0;
+                    while *s + l < len
+                        && prev + l < len
+                        && text[(*s + l) as usize] == text[(prev + l) as usize]
+                    {
+                        l += 1;
+                    }
+                    l
+                } else {
+                    0
+                };
+                pos[idx] += 1;
+            }
+        }
+
+        let mut child = vec![0; ssa.len()];
+        for i in 0..(offsets.len() - 1) {
+            let begin = offsets[i] as usize;
+            let end = offsets[i + 1] as usize;
+            if begin < end {
+                make_child_table(&slcp, &mut child, begin, end);
+            }
         }
 
         Self {
-            array,
+            array: ssa,
             child,
-            buckets,
+            offsets,
             bucket_width,
         }
     }
@@ -55,19 +122,17 @@ impl SuffixArray {
             idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * i);
         }
 
-        let range = &self.buckets[idx];
-        if range.start == range.end {
+        let begin = self.offsets[idx] as usize;
+        let end = self.offsets[idx + 1] as usize;
+        if begin == end {
             return None;
         }
-
-        let begin = range.start as usize;
-        let end = range.end as usize;
 
         if query.len() == self.bucket_width {
             return Some(begin..end);
         }
 
-        let store_pos = if self.child[begin] < range.end {
+        let store_pos = if self.child[begin] < end as u32 {
             begin
         } else {
             end - 1
@@ -106,13 +171,11 @@ impl SuffixArray {
             idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * i);
         }
 
-        let range = &self.buckets[idx];
-        if range.start == range.end {
+        let mut begin = self.offsets[idx] as usize;
+        let mut end = self.offsets[idx + 1] as usize;
+        if begin == end {
             return None;
         }
-
-        let mut begin = range.start as usize;
-        let mut end = range.end as usize;
 
         unsafe {
             equal_range(
@@ -375,11 +438,10 @@ fn make_lcp_array(text: &[u8], sa: &[u32]) -> Vec<u32> {
     lcp
 }
 
-fn make_child_table(lcp: &[u32]) -> Vec<u32> {
+fn make_child_table(lcp: &[u32], child_table: &mut [u32], begin: usize, end: usize) {
     use std::cmp::Ordering::*;
 
-    let mut child_table = vec![0; lcp.len()];
-    let mut stack = vec![(0, lcp.len(), 0)];
+    let mut stack = vec![(begin, end, begin)];
     let mut min_indices = Vec::new();
     while let Some((beg, end, store_pos)) = stack.pop() {
         if end - beg < 2 {
@@ -408,7 +470,6 @@ fn make_child_table(lcp: &[u32]) -> Vec<u32> {
         stack.push((beg, mid, mid - 1));
         stack.push((mid, end, mid))
     }
-    child_table
 }
 
 #[cfg(test)]
