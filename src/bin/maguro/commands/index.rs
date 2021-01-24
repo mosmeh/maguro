@@ -15,6 +15,8 @@ pub struct IndexCommand {
     index: PathBuf,
     #[structopt(short, long, default_value = "12")]
     k: usize,
+    #[structopt(short, long, default_value = "2")]
+    l: usize,
     #[structopt(short, long, default_value = "24")]
     bits: usize,
     #[structopt(long)]
@@ -27,6 +29,7 @@ impl Command for IndexCommand {
 
         let mut builder = IndexBuilder::from_file(self.reference)?
             .k(self.k)
+            .l(self.l)
             .bits(self.bits);
         if let Some(value) = self.header_sep {
             builder = builder.header_sep(value);

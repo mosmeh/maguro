@@ -14,11 +14,13 @@ pub struct SuffixArray {
     pub offsets: Vec<u32>,
     pub skip: Vec<u32>,
     pub k: usize,
+    pub l: usize,
     pub mask: usize,
+    pub shift: usize,
 }
 
 impl SuffixArray {
-    pub fn new(text: &[u8], k: usize, bits: usize) -> Self {
+    pub fn new(text: &[u8], k: usize, l: usize, bits: usize) -> Self {
         assert!(text.len() <= u32::MAX as usize + 1);
 
         let sa = SA::<i32>::new(text);
@@ -26,10 +28,16 @@ impl SuffixArray {
         let lcp = make_lcp_array(text, &array);
 
         let hashtable_len = 1 << bits;
-        let mask = hashtable_len - 1;
+        let mask = (hashtable_len >> (2 * l)) - 1;
+        let shift = bits - 2 * l;
         let mut counts = vec![0u32; hashtable_len];
         for i in 0..=(text.len() - k) {
-            counts[xxh32(&text[i..i + k], 0) as usize & mask] += 1;
+            let mut idx = 0;
+            for (i, x) in text[i..i + l].iter().enumerate() {
+                idx |= (crate::sequence::code_to_two_bit(*x) as usize) << (2 * i);
+            }
+            idx <<= shift;
+            counts[idx + (xxh32(&text[i + l..i + k], 0) as usize & mask)] += 1;
         }
 
         let mut cum_sum = 0;
@@ -46,25 +54,30 @@ impl SuffixArray {
         let mut ssa = vec![0; array.len()];
         let mut slcp = vec![0; array.len()];
         let mut skip = vec![k as u32; hashtable_len];
-        let mut idx = usize::MAX;
+        let mut hash = usize::MAX;
         let len = text.len() as u32;
         for (i, s) in array.iter().enumerate() {
             if *s as usize + k > text.len() {
                 continue;
             }
             if lcp[i] >= k as u32 {
-                let p = pos[idx] as usize;
+                let p = pos[hash] as usize;
                 ssa[p] = *s;
                 slcp[p] = lcp[i];
-                if skip[idx] > lcp[i] {
-                    skip[idx] = lcp[i];
+                if skip[hash] > lcp[i] {
+                    skip[hash] = lcp[i];
                 }
-                pos[idx] += 1;
+                pos[hash] += 1;
             } else {
-                idx = xxh32(&text[*s as usize..][..k], 0) as usize & mask;
-                let p = pos[idx] as usize;
+                let mut idx = 0;
+                for (i, x) in text[*s as usize..][..l].iter().enumerate() {
+                    idx |= (crate::sequence::code_to_two_bit(*x) as usize) << (2 * i);
+                }
+                idx <<= shift;
+                hash = idx + (xxh32(&text[*s as usize..][l..k], 0) as usize & mask);
+                let p = pos[hash] as usize;
                 ssa[p] = *s;
-                slcp[p] = if p as u32 > offsets[idx] {
+                slcp[p] = if p as u32 > offsets[hash] {
                     let prev = ssa[p - 1];
                     let mut l = 0;
                     while *s + l < len
@@ -73,14 +86,14 @@ impl SuffixArray {
                     {
                         l += 1;
                     }
-                    if skip[idx] > l {
-                        skip[idx] = l;
+                    if skip[hash] > l {
+                        skip[hash] = l;
                     }
                     l
                 } else {
                     0
                 };
-                pos[idx] += 1;
+                pos[hash] += 1;
             }
         }
 
@@ -99,11 +112,13 @@ impl SuffixArray {
             offsets,
             skip,
             k,
+            l,
             mask,
+            shift,
         }
     }
 
-    pub fn search(&self, text: &[u8], query: &[u8]) -> Option<Range<usize>> {
+    /*pub fn search(&self, text: &[u8], query: &[u8]) -> Option<Range<usize>> {
         let hash = xxh32(&query[..self.k], 0) as usize & self.mask;
 
         let begin = self.offsets[hash] as usize;
@@ -114,7 +129,7 @@ impl SuffixArray {
         }
 
         search_suffix_array(&self.ssa, &self.child, text, query, 0, begin, end, begin)
-    }
+    }*/
 
     /// Searches shortest (>= `min_len`) match of prefix of `query` to the `text`
     /// with at most `max_hits` hits.
@@ -130,7 +145,13 @@ impl SuffixArray {
     ) -> Option<(Range<usize>, usize)> {
         SEARCH_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        let hash = xxh32(&query[..self.k], 0) as usize & self.mask;
+        let mut idx = 0;
+        for (i, x) in query[..self.l].iter().enumerate() {
+            idx |= (crate::sequence::code_to_two_bit(*x) as usize) << (2 * i);
+        }
+        idx <<= self.shift;
+        let hash = idx + (xxh32(&query[self.l..self.k], 0) as usize & self.mask);
+
         let mut begin = self.offsets[hash] as usize;
         let mut end = self.offsets[hash + 1] as usize;
         if begin == end {
