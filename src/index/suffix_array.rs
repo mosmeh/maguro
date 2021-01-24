@@ -1,7 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 use sufsort_rs::sufsort::SA;
-use xxhash_rust::xxh32::xxh32;
 
 pub static STEP_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 pub static FOUND_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -14,22 +13,50 @@ pub struct SuffixArray {
     pub offsets: Vec<u32>,
     pub skip: Vec<u32>,
     pub k: usize,
-    pub mask: usize,
+    pub mphf: boomphf::Mphf<u64>,
 }
 
 impl SuffixArray {
-    pub fn new(text: &[u8], k: usize, bits: usize) -> Self {
+    pub fn new(text: &[u8], k: usize, _bits: usize) -> Self {
         assert!(text.len() <= u32::MAX as usize + 1);
 
         let sa = SA::<i32>::new(text);
         let array: Vec<_> = sa.sarray.into_iter().map(|x| x as u32).collect();
         let lcp = make_lcp_array(text, &array);
 
-        let hashtable_len = 1 << bits;
-        let mask = hashtable_len - 1;
-        let mut counts = vec![0u32; hashtable_len];
+        let mut kmers = std::collections::HashSet::new();
         for i in 0..=(text.len() - k) {
-            counts[xxh32(&text[i..i + k], 0) as usize & mask] += 1;
+            let seq = &text[i..i + k];
+            if seq
+                .iter()
+                .any(|x| *x == 0 || *x == crate::sequence::DUMMY_CODE)
+            {
+                continue;
+            }
+            let mut idx = 0;
+            for (i, x) in seq.iter().enumerate() {
+                idx |= (crate::sequence::code_to_two_bit(*x) as u64) << (2 * i);
+            }
+            kmers.insert(idx);
+        }
+
+        let kmers_len = kmers.len();
+        let mphf = boomphf::Mphf::new_parallel(3.5, &kmers.into_iter().collect::<Vec<u64>>(), None);
+
+        let mut counts = vec![0u32; kmers_len];
+        for i in 0..=(text.len() - k) {
+            let seq = &text[i..i + k];
+            if seq
+                .iter()
+                .any(|x| *x == 0 || *x == crate::sequence::DUMMY_CODE)
+            {
+                continue;
+            }
+            let mut idx = 0;
+            for (i, x) in seq.iter().enumerate() {
+                idx |= (crate::sequence::code_to_two_bit(*x) as u64) << (2 * i);
+            }
+            counts[mphf.hash(&idx) as usize] += 1;
         }
 
         let mut cum_sum = 0;
@@ -45,26 +72,44 @@ impl SuffixArray {
         let mut pos = offsets.clone();
         let mut ssa = vec![0; array.len()];
         let mut slcp = vec![0; array.len()];
-        let mut skip = vec![k as u32; hashtable_len];
-        let mut idx = usize::MAX;
+        let mut skip = vec![k as u32; kmers_len];
+        let mut hash = usize::MAX;
         let len = text.len() as u32;
         for (i, s) in array.iter().enumerate() {
             if *s as usize + k > text.len() {
                 continue;
             }
+            let seq = &text[*s as usize..][..k];
+            if seq
+                .iter()
+                .any(|x| *x == 0 || *x == crate::sequence::DUMMY_CODE)
+            {
+                continue;
+            }
             if lcp[i] >= k as u32 {
-                let p = pos[idx] as usize;
+                if hash == usize::MAX {
+                    let mut idx = 0;
+                    for (j, x) in seq.iter().enumerate() {
+                        idx |= (crate::sequence::code_to_two_bit(*x) as u64) << (2 * j);
+                    }
+                    hash = mphf.hash(&idx) as usize;
+                }
+                let p = pos[hash] as usize;
                 ssa[p] = *s;
                 slcp[p] = lcp[i];
-                if skip[idx] > lcp[i] {
-                    skip[idx] = lcp[i];
+                if skip[hash] > lcp[i] {
+                    skip[hash] = lcp[i];
                 }
-                pos[idx] += 1;
+                pos[hash] += 1;
             } else {
-                idx = xxh32(&text[*s as usize..][..k], 0) as usize & mask;
-                let p = pos[idx] as usize;
+                let mut idx = 0;
+                for (i, x) in seq.iter().enumerate() {
+                    idx |= (crate::sequence::code_to_two_bit(*x) as u64) << (2 * i);
+                }
+                hash = mphf.hash(&idx) as usize;
+                let p = pos[hash] as usize;
                 ssa[p] = *s;
-                slcp[p] = if p as u32 > offsets[idx] {
+                slcp[p] = if p as u32 > offsets[hash] {
                     let prev = ssa[p - 1];
                     let mut l = 0;
                     while *s + l < len
@@ -73,14 +118,14 @@ impl SuffixArray {
                     {
                         l += 1;
                     }
-                    if skip[idx] > l {
-                        skip[idx] = l;
+                    if skip[hash] > l {
+                        skip[hash] = l;
                     }
                     l
                 } else {
                     0
                 };
-                pos[idx] += 1;
+                pos[hash] += 1;
             }
         }
 
@@ -99,11 +144,11 @@ impl SuffixArray {
             offsets,
             skip,
             k,
-            mask,
+            mphf,
         }
     }
 
-    pub fn search(&self, text: &[u8], query: &[u8]) -> Option<Range<usize>> {
+    /*pub fn search(&self, text: &[u8], query: &[u8]) -> Option<Range<usize>> {
         let hash = xxh32(&query[..self.k], 0) as usize & self.mask;
 
         let begin = self.offsets[hash] as usize;
@@ -114,7 +159,7 @@ impl SuffixArray {
         }
 
         search_suffix_array(&self.ssa, &self.child, text, query, 0, begin, end, begin)
-    }
+    }*/
 
     /// Searches shortest (>= `min_len`) match of prefix of `query` to the `text`
     /// with at most `max_hits` hits.
@@ -130,25 +175,38 @@ impl SuffixArray {
     ) -> Option<(Range<usize>, usize)> {
         SEARCH_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        let hash = xxh32(&query[..self.k], 0) as usize & self.mask;
+        let mut idx = 0;
+        for (i, x) in query[..self.k].iter().enumerate() {
+            idx |= (crate::sequence::code_to_two_bit(*x) as u64) << (2 * i);
+        }
+        let hash = if let Some(h) = self.mphf.try_hash(&idx) {
+            h as usize
+        } else {
+            return None;
+        };
         let mut begin = self.offsets[hash] as usize;
         let mut end = self.offsets[hash + 1] as usize;
         if begin == end {
             return None;
         }
-
-        unsafe {
-            equal_range(
-                &self.ssa,
-                text.as_ptr(),
-                query.as_ptr(),
-                query.as_ptr().add(min_len),
-                &mut begin,
-                &mut end,
-            );
-        }
-        if begin == end {
+        if text[self.ssa[begin] as usize..][..self.k] != query[..self.k] {
             return None;
+        }
+
+        if self.k < min_len {
+            unsafe {
+                equal_range(
+                    &self.ssa,
+                    text.as_ptr().add(self.k),
+                    query.as_ptr().add(self.k),
+                    query.as_ptr().add(min_len),
+                    &mut begin,
+                    &mut end,
+                );
+            }
+            if begin == end {
+                return None;
+            }
         }
 
         FOUND_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);

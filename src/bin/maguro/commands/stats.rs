@@ -83,7 +83,7 @@ impl Command for StatsCommand {
 
         table.printstd();*/
 
-        let mut non_zero = 0;
+        /*let mut non_zero = 0;
         for i in 0..(index.sa.offsets.len() - 1) {
             let len = index.sa.offsets[i + 1] - index.sa.offsets[i];
             if len > 0 {
@@ -134,7 +134,7 @@ impl Command for StatsCommand {
             hist.percentile(99.0).unwrap(),
             hist.percentile(99.9).unwrap(),
             hist.stddev().unwrap(),
-        );
+        );*/
 
         Ok(())
     }
