@@ -94,7 +94,10 @@ impl Command for StatsCommand {
         let mut kmers = std::collections::HashSet::new();
         for i in 0..=(index.seq.len() - index.sa.k) {
             let kmer = &index.seq[i..][..index.sa.k];
-            if !kmer.iter().any(|x| *x == maguro::sequence::DUMMY_CODE) {
+            if !kmer
+                .iter()
+                .any(|x| *x == 0 || *x == maguro::sequence::DUMMY_CODE)
+            {
                 kmers.insert(kmer);
             }
         }
@@ -102,7 +105,12 @@ impl Command for StatsCommand {
         let mut counts = vec![0; index.sa.offsets.len() - 1];
         for kmer in &kmers {
             use xxhash_rust::xxh32::xxh32;
-            let hash = xxh32(kmer, 0) as usize & index.sa.mask;
+            let mut idx = 0;
+            for (i, x) in kmer[..index.sa.l].iter().enumerate() {
+                idx |= (maguro::sequence::code_to_two_bit(*x) as usize) << (2 * i);
+            }
+            idx <<= index.sa.shift;
+            let hash = idx + (xxh32(&kmer[index.sa.l..], 0) as usize & index.sa.mask);
             counts[hash] += 1;
         }
         let mut collision = 0;
