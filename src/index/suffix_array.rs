@@ -1,6 +1,7 @@
 use super::Rank9b;
 use crate::sequence;
 use bitvec::prelude::*;
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 use sufsort_rs::sufsort::SA;
@@ -12,8 +13,7 @@ pub static SEARCH_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::A
 #[derive(Serialize, Deserialize)]
 pub struct SuffixArray {
     pub array: Vec<u32>,
-    pub child: Vec<u32>,
-    pub buckets: Vec<Range<u32>>,
+    pub offsets: Vec<u32>,
     pub bucket_width: usize,
     pub rank_dict: Rank9b,
 }
@@ -27,38 +27,84 @@ impl SuffixArray {
         let array: Vec<_> = sa.sarray.into_iter().map(|x| x as u32).collect();
 
         let lcp = make_lcp_array(text, &array);
-        let child = make_child_table(&lcp);
 
         let buckets_len = 1 << (2 * bucket_width);
-        let mut prefix = vec![0; bucket_width];
-        let mut buckets = Vec::with_capacity(buckets_len);
         let mut bvec: BitVec<Lsb0, u64> = BitVec::new();
-
-        for idx in 0..buckets_len {
-            for (i, x) in prefix.iter_mut().enumerate() {
-                *x = sequence::two_bit_to_code((idx >> (2 * i)) as u8);
+        bvec.resize(buckets_len, false);
+        let mut counts = std::collections::HashMap::new();
+        for i in 0..=(text.len() - bucket_width) {
+            let seq = &text[i..i + bucket_width];
+            if seq.iter().any(|x| *x == 0 || *x == sequence::DUMMY_CODE) {
+                continue;
             }
-            if let Some(range) =
-                search_suffix_array(&array, &child, text, &prefix, 0, 0, text.len(), 0)
-            {
-                buckets.push(range.start as u32..range.end as u32);
-                bvec.push(true);
-            } else {
-                bvec.push(false);
+            let mut idx = 0;
+            for (j, x) in seq.iter().enumerate() {
+                idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * j);
             }
+            counts.entry(idx).and_modify(|x| *x += 1).or_insert(1);
+            *bvec.get_mut(idx).unwrap() = true;
         }
         bvec.push(true);
 
+        let mut cum_sum = 0;
+        for (_, count) in counts.iter_mut().sorted_by(|(a, _), (b, _)| a.cmp(&b)) {
+            let x = *count;
+            *count = cum_sum;
+            cum_sum += x;
+        }
+
+        let offsets = counts;
+
+        let mut pos = offsets.clone();
+        let mut ssa = vec![0; cum_sum as usize];
+        let mut idx = usize::MAX;
+        let len = text.len() as u32;
+        for (i, s) in array.into_iter().enumerate() {
+            if s as usize + bucket_width > text.len() {
+                continue;
+            }
+            let seq = &text[s as usize..][..bucket_width];
+            if seq.iter().any(|x| *x == 0 || *x == sequence::DUMMY_CODE) {
+                continue;
+            }
+            if lcp[i] >= bucket_width as u32 {
+                if idx == usize::MAX {
+                    idx = 0;
+                    for (j, x) in seq.iter().enumerate() {
+                        idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * j);
+                    }
+                }
+                let p = pos[&idx] as usize;
+                ssa[p] = s;
+                pos.entry(idx).and_modify(|x| *x += 1);
+            } else {
+                idx = 0;
+                for (j, x) in seq.iter().enumerate() {
+                    idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * j);
+                }
+                let p = pos[&idx] as usize;
+                ssa[p] = s;
+                pos.entry(idx).and_modify(|x| *x += 1);
+            }
+        }
+        drop(pos);
+
+        let mut offsets: Vec<_> = offsets
+            .into_iter()
+            .sorted_by(|(a, _), (b, _)| a.cmp(&b))
+            .map(|(_, x)| x)
+            .collect();
+        offsets.push(cum_sum);
+
         Self {
-            array,
-            child,
-            buckets,
+            array: ssa,
+            offsets,
             bucket_width,
             rank_dict: Rank9b::from_bit_vec(bvec),
         }
     }
 
-    pub fn search(&self, text: &[u8], query: &[u8]) -> Option<Range<usize>> {
+    /*pub fn search(&self, text: &[u8], query: &[u8]) -> Option<Range<usize>> {
         debug_assert!(self.bucket_width <= query.len());
 
         let mut idx = 0;
@@ -69,16 +115,13 @@ impl SuffixArray {
         if !self.rank_dict.bit(idx) {
             return None;
         }
-        let range = &self.buckets[(self.rank_dict.rank(idx + 1) - 1) as usize];
-
-        let begin = range.start as usize;
-        let end = range.end as usize;
+        let rank = self.rank_dict.rank(idx + 1) - 1) as usize;
 
         if query.len() == self.bucket_width {
             return Some(begin..end);
         }
 
-        let store_pos = if self.child[begin] < range.end {
+        let store_pos = if self.child[begin] < end as u32 {
             begin
         } else {
             end - 1
@@ -94,7 +137,7 @@ impl SuffixArray {
             end,
             store_pos,
         )
-    }
+    }*/
 
     /// Searches shortest (>= `min_len`) match of prefix of `query` to the `text`
     /// with at most `max_hits` hits.
@@ -120,49 +163,44 @@ impl SuffixArray {
         if !self.rank_dict.bit(idx) {
             return None;
         }
-        let range = &self.buckets[(self.rank_dict.rank(idx + 1) - 1) as usize];
+        let rank = (self.rank_dict.rank(idx + 1) - 1) as usize;
+        let mut begin = self.offsets[rank] as usize;
+        let mut end = self.offsets[rank + 1] as usize;
 
-        let mut depth = self.bucket_width;
-        let mut begin = range.start as usize;
-        let mut end = range.end as usize;
-        let mut store_pos = if self.child[begin] < range.end {
-            begin
-        } else {
-            end - 1
-        };
-
-        while depth < min_len {
-            if !do_one_step(
+        unsafe {
+            equal_range(
                 &self.array,
-                &self.child,
-                text,
-                query,
-                &mut depth,
+                text.as_ptr().add(self.bucket_width),
+                query.as_ptr().add(self.bucket_width),
+                query.as_ptr().add(min_len),
                 &mut begin,
                 &mut end,
-                &mut store_pos,
-            ) {
-                return None;
-            }
+            );
+        }
+        if begin == end {
+            return None;
         }
 
         FOUND_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
+        let mut depth = min_len;
         let query_len = query.len();
 
         while depth < query_len && end - begin > max_hits {
-            if !do_one_step(
-                &self.array,
-                &self.child,
-                text,
-                query,
-                &mut depth,
-                &mut begin,
-                &mut end,
-                &mut store_pos,
-            ) {
+            unsafe {
+                equal_range(
+                    &self.array,
+                    text.as_ptr().add(depth),
+                    query.as_ptr().add(depth),
+                    query.as_ptr().add(depth + 1),
+                    &mut begin,
+                    &mut end,
+                );
+            }
+            if begin == end {
                 return None;
             }
+            depth += 1;
         }
 
         if depth == query_len && end - begin > max_hits {
@@ -171,6 +209,121 @@ impl SuffixArray {
             Some((begin..end, depth))
         }
     }
+}
+
+unsafe fn equal_range(
+    sa: &[u32],
+    text_base: *const u8,
+    query_begin: *const u8,
+    query_end: *const u8,
+    begin: &mut usize,
+    end: &mut usize,
+) {
+    let mut q_begin = query_begin;
+    let mut q_end = q_begin;
+    let mut t_begin = text_base;
+    let mut t_end = t_begin;
+
+    while begin < end {
+        let mid = *begin + (*end as isize - *begin as isize) as usize / 2;
+        let offset = sa[mid] as usize;
+        let mut q;
+        let mut t;
+        if q_begin < q_end {
+            q = q_begin;
+            t = t_begin.add(offset);
+        } else {
+            q = q_end;
+            t = t_end.add(offset);
+        }
+        let mut x;
+        let mut y;
+        loop {
+            x = *t;
+            y = *q;
+            if x != y {
+                break;
+            };
+            q = q.add(1);
+            if q == query_end {
+                *begin = lower_bound(sa, t_begin, q_begin, query_end, *begin, mid);
+                *end = upper_bound(sa, t_end, q_end, query_end, mid + 1, *end);
+                return;
+            }
+            t = t.add(1);
+        }
+        if x < y {
+            *begin = mid + 1;
+            q_begin = q;
+            t_begin = t.sub(offset);
+        } else {
+            *end = mid;
+            q_end = q;
+            t_end = t.sub(offset);
+        }
+    }
+}
+
+unsafe fn lower_bound(
+    sa: &[u32],
+    mut text_base: *const u8,
+    mut query_begin: *const u8,
+    query_end: *const u8,
+    mut begin: usize,
+    mut end: usize,
+) -> usize {
+    while begin < end {
+        let mid = begin + (end - begin) / 2;
+        let offset = sa[mid];
+        let mut t = text_base.offset(offset as isize);
+        let mut q = query_begin;
+        loop {
+            if *t < *q {
+                begin = mid + 1;
+                query_begin = q;
+                text_base = t.sub(offset as usize);
+                break;
+            }
+            q = q.add(1);
+            if q == query_end {
+                end = mid;
+                break;
+            }
+            t = t.add(1);
+        }
+    }
+    begin
+}
+
+unsafe fn upper_bound(
+    sa: &[u32],
+    mut text_base: *const u8,
+    mut query_begin: *const u8,
+    query_end: *const u8,
+    mut begin: usize,
+    mut end: usize,
+) -> usize {
+    while begin < end {
+        let mid = begin + (end - begin) / 2;
+        let offset = sa[mid];
+        let mut t = text_base.offset(offset as isize);
+        let mut q = query_begin;
+        loop {
+            if *t > *q {
+                end = mid;
+                query_begin = q;
+                text_base = t.sub(offset as usize);
+                break;
+            }
+            q = q.add(1);
+            if q == query_end {
+                begin = mid + 1;
+                break;
+            }
+            t = t.add(1);
+        }
+    }
+    end
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -275,11 +428,10 @@ fn make_lcp_array(text: &[u8], sa: &[u32]) -> Vec<u32> {
     lcp
 }
 
-fn make_child_table(lcp: &[u32]) -> Vec<u32> {
+fn make_child_table(lcp: &[u32], child_table: &mut [u32], begin: usize, end: usize) {
     use std::cmp::Ordering::*;
 
-    let mut child_table = vec![0; lcp.len()];
-    let mut stack = vec![(0, lcp.len(), 0)];
+    let mut stack = vec![(begin, end, begin)];
     let mut min_indices = Vec::new();
     while let Some((beg, end, store_pos)) = stack.pop() {
         if end - beg < 2 {
@@ -308,7 +460,6 @@ fn make_child_table(lcp: &[u32]) -> Vec<u32> {
         stack.push((beg, mid, mid - 1));
         stack.push((mid, end, mid))
     }
-    child_table
 }
 
 #[cfg(test)]
