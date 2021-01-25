@@ -102,15 +102,15 @@ impl Command for StatsCommand {
             }
         }
 
-        let mut counts = vec![0; index.sa.offsets.len() - 1];
+        let mut counts = std::collections::HashMap::new();
         for kmer in &kmers {
             use xxhash_rust::xxh32::xxh32;
             let hash = xxh32(kmer, 0) as usize & index.sa.mask;
-            counts[hash] += 1;
+            counts.entry(hash).and_modify(|x| *x += 1);
         }
         let mut collision = 0;
-        for count in counts {
-            if count > 1 {
+        for count in counts.values() {
+            if *count > 1 {
                 collision += count;
             }
         }
@@ -121,9 +121,9 @@ impl Command for StatsCommand {
             hist.increment(len as u64).unwrap();
         }
 
-        // k buckets kmers util_count coll_count util coll max p50 p90 p99 p999 stddev
+        // k buckets kmers util_count coll_count util coll max p50 p90 p99 p999 stddev offsets rank size/4bytes
         println!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             index.sa.k,
             index.sa.offsets.len() - 1,
             kmers.len(),
@@ -137,6 +137,9 @@ impl Command for StatsCommand {
             hist.percentile(99.0).unwrap(),
             hist.percentile(99.9).unwrap(),
             hist.stddev().unwrap(),
+            index.sa.offsets.len() - 1,
+            index.sa.rank_dict.size_bytes(),
+            index.sa.offsets.len() + index.sa.rank_dict.size_bytes() / 4
         );
 
         Ok(())

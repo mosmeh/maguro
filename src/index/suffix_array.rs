@@ -1,3 +1,6 @@
+use super::Rank9b;
+use bitvec::prelude::*;
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 use sufsort_rs::sufsort::SA;
@@ -10,11 +13,10 @@ pub static SEARCH_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::A
 #[derive(Serialize, Deserialize)]
 pub struct SuffixArray {
     pub ssa: Vec<u32>,
-    pub child: Vec<u32>,
     pub offsets: Vec<u32>,
-    pub skip: Vec<u32>,
     pub k: usize,
     pub mask: usize,
+    pub rank_dict: Rank9b,
 }
 
 impl SuffixArray {
@@ -27,7 +29,9 @@ impl SuffixArray {
 
         let hashtable_len = 1 << bits;
         let mask = hashtable_len - 1;
-        let mut counts = vec![0u32; hashtable_len];
+        let mut bvec: BitVec<Lsb0, u64> = BitVec::new();
+        bvec.resize(hashtable_len, false);
+        let mut counts = std::collections::HashMap::new();
         for i in 0..=(text.len() - k) {
             let seq = &text[i..i + k];
             if seq
@@ -36,30 +40,29 @@ impl SuffixArray {
             {
                 continue;
             }
-            counts[xxh32(&seq, 0) as usize & mask] += 1;
+            let hash = xxh32(&seq, 0) as usize & mask;
+            counts.entry(hash).and_modify(|x| *x += 1).or_insert(1);
+            *bvec.get_mut(hash).unwrap() = true;
         }
+        bvec.push(true);
 
         let mut cum_sum = 0;
-        for count in counts.iter_mut() {
+        for (_, count) in counts.iter_mut().sorted_by(|(a, _), (b, _)| a.cmp(&b)) {
             let x = *count;
             *count = cum_sum;
             cum_sum += x;
         }
-        counts.push(cum_sum);
 
         let offsets = counts;
 
         let mut pos = offsets.clone();
         let mut ssa = vec![0; array.len()];
-        let mut slcp = vec![0; array.len()];
-        let mut skip = vec![k as u32; hashtable_len];
         let mut idx = usize::MAX;
-        let len = text.len() as u32;
-        for (i, s) in array.iter().enumerate() {
-            if *s as usize + k > text.len() {
+        for (i, s) in array.into_iter().enumerate() {
+            if s as usize + k > text.len() {
                 continue;
             }
-            let seq = &text[*s as usize..][..k];
+            let seq = &text[s as usize..][..k];
             if seq
                 .iter()
                 .any(|x| *x == 0 || *x == crate::sequence::DUMMY_CODE)
@@ -70,57 +73,35 @@ impl SuffixArray {
                 if idx == usize::MAX {
                     idx = xxh32(&seq, 0) as usize & mask;
                 }
-                let p = pos[idx] as usize;
-                ssa[p] = *s;
-                slcp[p] = lcp[i];
-                if skip[idx] > lcp[i] {
-                    skip[idx] = lcp[i];
-                }
-                pos[idx] += 1;
+                let p = pos[&idx] as usize;
+                ssa[p] = s;
+                pos.entry(idx).and_modify(|x| *x += 1);
             } else {
                 idx = xxh32(&seq, 0) as usize & mask;
-                let p = pos[idx] as usize;
-                ssa[p] = *s;
-                slcp[p] = if p as u32 > offsets[idx] {
-                    let prev = ssa[p - 1];
-                    let mut l = 0;
-                    while *s + l < len
-                        && prev + l < len
-                        && text[(*s + l) as usize] == text[(prev + l) as usize]
-                    {
-                        l += 1;
-                    }
-                    if skip[idx] > l {
-                        skip[idx] = l;
-                    }
-                    l
-                } else {
-                    0
-                };
-                pos[idx] += 1;
+                let p = pos[&idx] as usize;
+                ssa[p] = s;
+                pos.entry(idx).and_modify(|x| *x += 1);
             }
         }
+        drop(pos);
 
-        let mut child = vec![0; ssa.len()];
-        for i in 0..(offsets.len() - 1) {
-            let begin = offsets[i] as usize;
-            let end = offsets[i + 1] as usize;
-            if begin < end {
-                make_child_table(&slcp, &mut child, begin, end);
-            }
-        }
+        let mut offsets: Vec<_> = offsets
+            .into_iter()
+            .sorted_by(|(a, _), (b, _)| a.cmp(&b))
+            .map(|(_, x)| x)
+            .collect();
+        offsets.push(cum_sum);
 
         Self {
             ssa,
-            child,
             offsets,
-            skip,
             k,
             mask,
+            rank_dict: Rank9b::from_bit_vec(bvec),
         }
     }
 
-    pub fn search(&self, text: &[u8], query: &[u8]) -> Option<Range<usize>> {
+    /*pub fn search(&self, text: &[u8], query: &[u8]) -> Option<Range<usize>> {
         let hash = xxh32(&query[..self.k], 0) as usize & self.mask;
 
         let begin = self.offsets[hash] as usize;
@@ -131,7 +112,7 @@ impl SuffixArray {
         }
 
         search_suffix_array(&self.ssa, &self.child, text, query, 0, begin, end, begin)
-    }
+    }*/
 
     /// Searches shortest (>= `min_len`) match of prefix of `query` to the `text`
     /// with at most `max_hits` hits.
@@ -148,11 +129,13 @@ impl SuffixArray {
         SEARCH_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         let hash = xxh32(&query[..self.k], 0) as usize & self.mask;
-        let mut begin = self.offsets[hash] as usize;
-        let mut end = self.offsets[hash + 1] as usize;
-        if begin == end {
+        if !self.rank_dict.bit(hash) {
             return None;
         }
+
+        let rank = (self.rank_dict.rank(hash + 1) - 1) as usize;
+        let mut begin = self.offsets[rank] as usize;
+        let mut end = self.offsets[rank + 1] as usize;
 
         unsafe {
             equal_range(

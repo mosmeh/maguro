@@ -40,6 +40,10 @@ impl Rank9b {
         Self::from_vec(bits.into_vec(), num_bits)
     }
 
+    pub fn bit(&self, k: usize) -> bool {
+        self.bits[k / 64] & (1 << (k % 64)) != 0
+    }
+
     pub fn rank(&self, k: usize) -> u64 {
         let word = k / 64;
         let block = (word / 4) & !1;
