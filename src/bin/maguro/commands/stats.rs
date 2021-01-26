@@ -104,8 +104,8 @@ impl Command for StatsCommand {
 
         let mut counts = std::collections::HashMap::new();
         for kmer in &kmers {
-            use xxhash_rust::xxh32::xxh32;
-            let hash = xxh32(kmer, 0) as usize & index.sa.mask;
+            use xxhash_rust::xxh3::xxh3_64;
+            let hash = xxh3_64(kmer) as usize & index.sa.mask;
             counts.entry(hash).and_modify(|x| *x += 1);
         }
         let mut collision = 0;

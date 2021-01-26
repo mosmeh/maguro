@@ -4,7 +4,7 @@ use itertools::Itertools;
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 use sufsort_rs::sufsort::SA;
-use xxhash_rust::xxh32::xxh32;
+use xxhash_rust::xxh3::xxh3_64;
 
 pub static STEP_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 pub static FOUND_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -40,7 +40,7 @@ impl SuffixArray {
             {
                 continue;
             }
-            let hash = xxh32(&seq, 0) as usize & mask;
+            let hash = xxh3_64(&seq) as usize & mask;
             counts.entry(hash).and_modify(|x| *x += 1).or_insert(1);
             *bvec.get_mut(hash).unwrap() = true;
         }
@@ -71,13 +71,13 @@ impl SuffixArray {
             }
             if lcp[i] >= k as u32 {
                 if idx == usize::MAX {
-                    idx = xxh32(&seq, 0) as usize & mask;
+                    idx = xxh3_64(&seq) as usize & mask;
                 }
                 let p = pos[&idx] as usize;
                 ssa[p] = s;
                 pos.entry(idx).and_modify(|x| *x += 1);
             } else {
-                idx = xxh32(&seq, 0) as usize & mask;
+                idx = xxh3_64(&seq) as usize & mask;
                 let p = pos[&idx] as usize;
                 ssa[p] = s;
                 pos.entry(idx).and_modify(|x| *x += 1);
@@ -128,7 +128,7 @@ impl SuffixArray {
     ) -> Option<(Range<usize>, usize)> {
         SEARCH_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        let hash = xxh32(&query[..self.k], 0) as usize & self.mask;
+        let hash = xxh3_64(&query[..self.k]) as usize & self.mask;
         if !self.rank_dict.bit(hash) {
             return None;
         }
