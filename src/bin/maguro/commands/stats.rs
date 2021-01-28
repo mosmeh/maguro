@@ -83,14 +83,6 @@ impl Command for StatsCommand {
 
         table.printstd();*/
 
-        let mut non_zero = 0;
-        for i in 0..(index.sa.offsets.len() - 1) {
-            let len = index.sa.offsets[i + 1] - index.sa.offsets[i];
-            if len > 0 {
-                non_zero += 1;
-            }
-        }
-
         let mut kmers = std::collections::HashSet::new();
         for i in 0..=(index.seq.len() - index.sa.k) {
             let kmer = &index.seq[i..][..index.sa.k];
@@ -115,9 +107,18 @@ impl Command for StatsCommand {
             }
         }
 
+        let mut non_zero = 0;
+        let mut non_head = 0;
         let mut hist = histogram::Config::new().precision(5).build().unwrap();
-        for i in 0..(index.sa.offsets.len() - 1) {
-            let len = index.sa.offsets[i + 1] - index.sa.offsets[i];
+        for i in 0..index.sa.offsets.len() {
+            let o = index.sa.offsets[i];
+            let len = if o.0 == u32::MAX { 1 } else { o.1 - o.0 };
+            if len > 0 {
+                non_zero += 1;
+            }
+            if len > 1 {
+                non_head += 1;
+            }
             hist.increment(len as u64).unwrap();
         }
 
@@ -125,11 +126,11 @@ impl Command for StatsCommand {
         println!(
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             index.sa.k,
-            index.sa.offsets.len() - 1,
+            index.sa.offsets.len(),
             kmers.len(),
             non_zero,
             collision,
-            non_zero as f64 * 100.0 / (index.sa.offsets.len() - 1) as f64,
+            non_zero as f64 * 100.0 / index.sa.offsets.len() as f64,
             collision as f64 * 100.0 / kmers.len() as f64,
             hist.maximum().unwrap(),
             hist.percentile(50.0).unwrap(),
@@ -137,9 +138,9 @@ impl Command for StatsCommand {
             hist.percentile(99.0).unwrap(),
             hist.percentile(99.9).unwrap(),
             hist.stddev().unwrap(),
-            index.sa.offsets.len() - 1,
+            index.sa.offsets.len(),
             index.sa.rank_dict.size_bytes(),
-            index.sa.offsets.len() + index.sa.rank_dict.size_bytes() / 4
+            index.sa.offsets.len() - non_head + non_head * 2 + index.sa.rank_dict.size_bytes() / 4
         );
 
         Ok(())

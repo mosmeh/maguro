@@ -95,11 +95,9 @@ impl Mapper<'_> {
                     self.seed_min_len,
                     self.seed_max_hits,
                 );
-                if let Some((range, len)) = result {
-                    for i in range {
-                        let pos = self.index.sa.ssa[i] as usize;
+                match result {
+                    Some((crate::index::suffix_array::SearchResult::Single(pos), len)) => {
                         let id = self.index.seq_id_from_pos(pos);
-
                         ref_to_anchors
                             .entry((id, strand))
                             .and_modify(|anchors| {
@@ -117,6 +115,30 @@ impl Mapper<'_> {
                                 }]
                             });
                     }
+                    Some((crate::index::suffix_array::SearchResult::Multi(range), len)) => {
+                        for i in range {
+                            let pos = self.index.sa.ssa[i] as usize;
+                            let id = self.index.seq_id_from_pos(pos);
+
+                            ref_to_anchors
+                                .entry((id, strand))
+                                .and_modify(|anchors| {
+                                    anchors.push(Anchor {
+                                        query_pos: seed_pos,
+                                        ref_pos: pos,
+                                        len,
+                                    })
+                                })
+                                .or_insert_with(|| {
+                                    vec![Anchor {
+                                        query_pos: seed_pos,
+                                        ref_pos: pos,
+                                        len,
+                                    }]
+                                });
+                        }
+                    }
+                    None => {}
                 }
             }
         };

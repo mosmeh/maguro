@@ -10,10 +10,15 @@ pub static STEP_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::Ato
 pub static FOUND_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 pub static SEARCH_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+pub enum SearchResult {
+    Single(usize),
+    Multi(Range<usize>),
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct SuffixArray {
     pub ssa: Vec<u32>,
-    pub offsets: Vec<u32>,
+    pub offsets: Vec<(u32, u32)>,
     pub k: usize,
     pub mask: usize,
     pub rank_dict: Rank9b,
@@ -47,15 +52,19 @@ impl SuffixArray {
         bvec.push(true);
 
         let mut cum_sum = 0;
-        for (_, count) in counts.iter_mut().sorted_by(|(a, _), (b, _)| a.cmp(&b)) {
-            let x = *count;
-            *count = cum_sum;
-            cum_sum += x;
+        let mut offsets = std::collections::HashMap::new();
+        for (hash, count) in counts.iter_mut().sorted_by(|(a, _), (b, _)| a.cmp(&b)) {
+            if *count > 1 {
+                let x = *count;
+                *count = cum_sum;
+                cum_sum += x;
+                offsets.insert(*hash, (*count, cum_sum));
+            } else {
+                *count = u32::MAX;
+            }
         }
 
-        let offsets = counts;
-
-        let mut pos = offsets.clone();
+        let mut pos = counts;
         let mut ssa = vec![0; array.len()];
         let mut idx = usize::MAX;
         for (i, s) in array.into_iter().enumerate() {
@@ -73,24 +82,31 @@ impl SuffixArray {
                 if idx == usize::MAX {
                     idx = xxh32(&seq, 0) as usize & mask;
                 }
-                let p = pos[&idx] as usize;
-                ssa[p] = s;
-                pos.entry(idx).and_modify(|x| *x += 1);
+                if pos[&idx] != u32::MAX {
+                    let p = pos[&idx] as usize;
+                    ssa[p] = s;
+                    pos.entry(idx).and_modify(|x| *x += 1);
+                } else {
+                    offsets.insert(idx, (u32::MAX, s));
+                }
             } else {
                 idx = xxh32(&seq, 0) as usize & mask;
-                let p = pos[&idx] as usize;
-                ssa[p] = s;
-                pos.entry(idx).and_modify(|x| *x += 1);
+                if pos[&idx] != u32::MAX {
+                    let p = pos[&idx] as usize;
+                    ssa[p] = s;
+                    pos.entry(idx).and_modify(|x| *x += 1);
+                } else {
+                    offsets.insert(idx, (u32::MAX, s));
+                }
             }
         }
         drop(pos);
 
-        let mut offsets: Vec<_> = offsets
+        let offsets: Vec<_> = offsets
             .into_iter()
             .sorted_by(|(a, _), (b, _)| a.cmp(&b))
             .map(|(_, x)| x)
             .collect();
-        offsets.push(cum_sum);
 
         Self {
             ssa,
@@ -125,7 +141,7 @@ impl SuffixArray {
         query: &[u8],
         min_len: usize,
         max_hits: usize,
-    ) -> Option<(Range<usize>, usize)> {
+    ) -> Option<(SearchResult, usize)> {
         SEARCH_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         let hash = xxh32(&query[..self.k], 0) as usize & self.mask;
@@ -134,8 +150,22 @@ impl SuffixArray {
         }
 
         let rank = (self.rank_dict.rank(hash + 1) - 1) as usize;
-        let mut begin = self.offsets[rank] as usize;
-        let mut end = self.offsets[rank + 1] as usize;
+        let range = self.offsets[rank];
+        if range.0 == u32::MAX {
+            if range.1 as usize + min_len > text.len() {
+                return None;
+            }
+            if self.k < min_len
+                && query[self.k..min_len] != text[range.1 as usize..][self.k..min_len]
+            {
+                return None;
+            }
+            FOUND_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            return Some((SearchResult::Single(range.1 as usize), min_len));
+        }
+
+        let mut begin = range.0 as usize;
+        let mut end = range.1 as usize;
 
         unsafe {
             equal_range(
@@ -176,7 +206,7 @@ impl SuffixArray {
         if depth == query_len && end - begin > max_hits {
             None
         } else {
-            Some((begin..end, depth))
+            Some((SearchResult::Multi(begin..end), depth))
         }
     }
 }
