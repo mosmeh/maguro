@@ -13,8 +13,8 @@ pub struct IndexCommand {
     reference: PathBuf,
     #[structopt(short, long)]
     index: PathBuf,
-    #[structopt(short, long, default_value = "28")]
-    k: usize,
+    #[structopt(short, long)]
+    k: Option<usize>,
     #[structopt(short, long, default_value = "12")]
     l: usize,
     #[structopt(long)]
@@ -25,7 +25,9 @@ impl Command for IndexCommand {
     fn run(self) -> anyhow::Result<()> {
         eprintln!("{:#?}", self);
 
-        let mut builder = IndexBuilder::from_file(self.reference)?.k(self.k).l(self.l);
+        let mut builder = IndexBuilder::from_file(self.reference)?
+            .k(self.k.unwrap_or(self.l + 16))
+            .l(self.l);
         if let Some(value) = self.header_sep {
             builder = builder.header_sep(value);
         }
