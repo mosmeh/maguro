@@ -123,9 +123,20 @@ impl Command for StatsCommand {
             hist.increment(len as u64).unwrap();
         }
 
-        // k buckets kmers util_count coll_count util coll max p50 p90 p99 p999 stddev
+        let mut rights = 0;
+        for i in 0..(index.sa.offsets.len() - 1) {
+            let begin = index.sa.offsets[i];
+            let next_begin = index.sa.offsets[i + 1];
+            if begin == next_begin {
+                continue;
+            }
+            let end = index.sa.ssa[begin as usize];
+            rights += end - begin;
+        }
+
+        // k buckets kmers util_count coll_count util coll max p50 p90 p99 p999 stddev offsets rank size/4bytes
         println!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
             index.sa.k,
             index.sa.offsets.len() - 1,
             kmers.len(),
@@ -139,6 +150,9 @@ impl Command for StatsCommand {
             hist.percentile(99.0).unwrap(),
             hist.percentile(99.9).unwrap(),
             hist.stddev().unwrap(),
+            index.sa.offsets.len() - 1,
+            0,
+            index.sa.offsets.len() + rights as usize
         );
 
         Ok(())
