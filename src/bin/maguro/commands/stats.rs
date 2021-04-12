@@ -104,9 +104,11 @@ impl Command for StatsCommand {
 
         let mut counts = vec![0; index.sa.offsets.len() - 1];
         for kmer in &kmers {
-            use xxhash_rust::xxh32::xxh32;
-            let hash = xxh32(kmer, 0) as usize & index.sa.mask;
-            counts[hash] += 1;
+            let mut left = 0;
+            for (j, x) in kmer[..index.sa.l].iter().enumerate() {
+                left |= (maguro::sequence::code_to_two_bit(*x) as u32) << (2 * j);
+            }
+            counts[left as usize] += 1;
         }
         let mut collision = 0;
         for count in counts {

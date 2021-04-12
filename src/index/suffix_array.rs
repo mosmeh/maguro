@@ -1,7 +1,7 @@
+use crate::sequence;
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 use sufsort_rs::sufsort::SA;
-use xxhash_rust::xxh32::xxh32;
 
 pub static STEP_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 pub static FOUND_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
@@ -10,117 +10,115 @@ pub static SEARCH_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::A
 #[derive(Serialize, Deserialize)]
 pub struct SuffixArray {
     pub ssa: Vec<u32>,
-    pub child: Vec<u32>,
     pub offsets: Vec<u32>,
-    pub skip: Vec<u32>,
     pub k: usize,
-    pub mask: usize,
+    pub l: usize,
 }
 
 impl SuffixArray {
-    pub fn new(text: &[u8], k: usize, bits: usize) -> Self {
+    pub fn new(text: &[u8], k: usize, l: usize) -> Self {
         assert!(text.len() <= u32::MAX as usize + 1);
 
         let sa = SA::<i32>::new(text);
         let array: Vec<_> = sa.sarray.into_iter().map(|x| x as u32).collect();
-        let lcp = make_lcp_array(text, &array);
 
-        let hashtable_len = 1 << bits;
-        let mask = hashtable_len - 1;
-        let mut counts = vec![0u32; hashtable_len];
-        for i in 0..=(text.len() - k) {
-            let seq = &text[i..i + k];
+        let offsets_len = 1 << (2 * l);
+        let mut left_to_indices = vec![sorted_list::SortedList::new(); offsets_len];
+        for s in array {
+            if s as usize + k > text.len() {
+                continue;
+            }
+            let seq = &text[s as usize..][..k];
             if seq
                 .iter()
                 .any(|x| *x == 0 || *x == crate::sequence::DUMMY_CODE)
             {
                 continue;
             }
-            counts[xxh32(&seq, 0) as usize & mask] += 1;
+
+            let mut left = 0;
+            let mut right = 0;
+            for (j, x) in seq[..l].iter().enumerate() {
+                left |= (sequence::code_to_two_bit(*x) as u32) << (2 * j);
+            }
+            for (j, x) in seq[l..k].iter().enumerate() {
+                right |= (sequence::code_to_two_bit(*x) as u32) << (2 * j);
+            }
+            left_to_indices[left as usize].insert(right, s);
         }
 
-        let mut cum_sum = 0;
-        for count in counts.iter_mut() {
-            let x = *count;
-            *count = cum_sum;
-            cum_sum += x;
+        let mut left_to_right_counts = Vec::new();
+        for indices in &left_to_indices {
+            let mut prev = None;
+            let mut count = 0;
+            for (i, _) in indices.iter() {
+                if prev.is_none() || prev.unwrap() != i {
+                    count += 1;
+                    prev = Some(i);
+                }
+            }
+            left_to_right_counts.push(count);
         }
-        counts.push(cum_sum);
 
-        let offsets = counts;
+        let mut offsets = Vec::new();
+        let mut offset_start = 0;
+        for i in 0..offsets_len {
+            offsets.push(offset_start);
+            offset_start += left_to_indices[i].len() as u32 + left_to_right_counts[i] * 2;
+        }
+        offsets.push(offset_start);
 
-        let mut pos = offsets.clone();
-        let mut ssa = vec![0; array.len()];
-        let mut slcp = vec![0; array.len()];
-        let mut skip = vec![k as u32; hashtable_len];
-        let mut idx = usize::MAX;
-        let len = text.len() as u32;
-        for (i, s) in array.iter().enumerate() {
-            if *s as usize + k > text.len() {
+        let mut ssa = vec![0u32; offset_start as usize];
+        for i in 0..offsets_len {
+            let right_count = left_to_right_counts[i] as usize;
+            if right_count == 0 {
                 continue;
             }
-            let seq = &text[*s as usize..][..k];
-            if seq
-                .iter()
-                .any(|x| *x == 0 || *x == crate::sequence::DUMMY_CODE)
-            {
+
+            let mut prev = *left_to_indices[i].iter().next().unwrap().0;
+            let mut z = offsets[i] as usize;
+            let mut pos = z + 2 * right_count;
+
+            ssa[z] = pos as u32;
+            ssa[z + right_count] = prev;
+            z += 1;
+
+            for (right, s) in left_to_indices[i].iter() {
+                if prev != *right {
+                    ssa[z] = pos as u32;
+                    ssa[z + right_count] = *right;
+                    z += 1;
+                    prev = *right;
+                }
+                ssa[pos] = *s;
+                pos += 1;
+            }
+
+            /*assert!(pos == offsets[i + 1] as usize);
+            assert!((ssa[offsets[i] as usize] - offsets[i]) % 2 == 0);*/
+        }
+
+        /*for i in 0..offsets_len {
+            if offsets[i] == offsets[i + 1] {
                 continue;
             }
-            if lcp[i] >= k as u32 {
-                if idx == usize::MAX {
-                    idx = xxh32(&seq, 0) as usize & mask;
-                }
-                let p = pos[idx] as usize;
-                ssa[p] = *s;
-                slcp[p] = lcp[i];
-                if skip[idx] > lcp[i] {
-                    skip[idx] = lcp[i];
-                }
-                pos[idx] += 1;
-            } else {
-                idx = xxh32(&seq, 0) as usize & mask;
-                let p = pos[idx] as usize;
-                ssa[p] = *s;
-                slcp[p] = if p as u32 > offsets[idx] {
-                    let prev = ssa[p - 1];
-                    let mut l = 0;
-                    while *s + l < len
-                        && prev + l < len
-                        && text[(*s + l) as usize] == text[(prev + l) as usize]
-                    {
-                        l += 1;
-                    }
-                    if skip[idx] > l {
-                        skip[idx] = l;
-                    }
-                    l
-                } else {
-                    0
-                };
-                pos[idx] += 1;
+            let i_begin = ssa[offsets[i] as usize] as usize;
+            let i_end = offsets[i + 1] as usize;
+            for j in &ssa[i_begin..i_end] {
+                assert!((*j as usize) < text.len());
             }
-        }
-
-        let mut child = vec![0; ssa.len()];
-        for i in 0..(offsets.len() - 1) {
-            let begin = offsets[i] as usize;
-            let end = offsets[i + 1] as usize;
-            if begin < end {
-                make_child_table(&slcp, &mut child, begin, end);
+            let j_begin = offsets[i] as usize;
+            assert!((i_begin - j_begin) % 2 == 0);
+            let j_end = (i_begin as usize - j_begin) / 2 + j_begin;
+            for j in &ssa[j_begin..j_end] {
+                assert!((*j as usize) < i_end);
             }
-        }
+        }*/
 
-        Self {
-            ssa,
-            child,
-            offsets,
-            skip,
-            k,
-            mask,
-        }
+        Self { ssa, offsets, k, l }
     }
 
-    pub fn search(&self, text: &[u8], query: &[u8]) -> Option<Range<usize>> {
+    /*pub fn search(&self, text: &[u8], query: &[u8]) -> Option<Range<usize>> {
         let hash = xxh32(&query[..self.k], 0) as usize & self.mask;
 
         let begin = self.offsets[hash] as usize;
@@ -131,7 +129,7 @@ impl SuffixArray {
         }
 
         search_suffix_array(&self.ssa, &self.child, text, query, 0, begin, end, begin)
-    }
+    }*/
 
     /// Searches shortest (>= `min_len`) match of prefix of `query` to the `text`
     /// with at most `max_hits` hits.
@@ -145,20 +143,62 @@ impl SuffixArray {
         min_len: usize,
         max_hits: usize,
     ) -> Option<(Range<usize>, usize)> {
+        //assert!(query.len() >= self.k && min_len >= self.k);
         SEARCH_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        let hash = xxh32(&query[..self.k], 0) as usize & self.mask;
-        let mut begin = self.offsets[hash] as usize;
-        let mut end = self.offsets[hash + 1] as usize;
-        if begin == end {
+        let mut left = 0;
+        for (j, x) in query[..self.l].iter().enumerate() {
+            left |= (sequence::code_to_two_bit(*x) as u32) << (2 * j);
+        }
+        let section_begin = self.offsets[left as usize];
+        let section_end = self.offsets[left as usize + 1];
+        if section_begin == section_end {
             return None;
         }
+
+        let head_begin = section_begin;
+        let head_end = self.ssa[section_begin as usize];
+        let num_rights = (head_end - head_begin) / 2;
+        let right_begin = (head_begin + num_rights) as usize;
+        let right_end = head_end as usize;
+
+        let mut right = 0;
+        for (j, x) in query[self.l..self.k].iter().enumerate() {
+            right |= (sequence::code_to_two_bit(*x) as u32) << (2 * j);
+        }
+        let idx = if let Ok(i) = self.ssa[right_begin..right_end].binary_search(&right) {
+            i
+        } else {
+            return None;
+        };
+
+        let mut begin = self.ssa[head_begin as usize + idx] as usize;
+        let mut end = if head_begin as usize + idx + 1 == right_begin {
+            section_end
+        } else {
+            self.ssa[head_begin as usize + idx + 1]
+        } as usize;
+
+        /*println!(
+            "{}",
+            String::from_utf8(crate::sequence::decode(&query)).unwrap()
+        );
+        println!("{} {}", begin, end);
+        for i in &self.ssa[begin..end] {
+            println!(
+                "{}",
+                String::from_utf8(crate::sequence::decode(
+                    &text[*i as usize..*i as usize + 30]
+                ))
+                .unwrap()
+            );
+        }*/
 
         unsafe {
             equal_range(
                 &self.ssa,
-                text.as_ptr(),
-                query.as_ptr(),
+                text.as_ptr().add(self.k),
+                query.as_ptr().add(self.k),
                 query.as_ptr().add(min_len),
                 &mut begin,
                 &mut end,

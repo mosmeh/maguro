@@ -59,7 +59,7 @@ impl Index {
 pub struct IndexBuilder<R: io::Read> {
     reader: fasta::Reader<R>,
     k: usize,
-    bits: usize,
+    l: usize,
     header_sep: Option<String>,
 }
 
@@ -74,7 +74,7 @@ impl<R: io::Read> IndexBuilder<R> {
         Self {
             reader,
             k: 4,
-            bits: 2,
+            l: 2,
             header_sep: None,
         }
     }
@@ -88,8 +88,8 @@ impl<R: io::Read> IndexBuilder<R> {
         self
     }
 
-    pub fn bits(mut self, bits: usize) -> Self {
-        self.bits = bits;
+    pub fn l(mut self, l: usize) -> Self {
+        self.l = l;
         self
     }
 
@@ -129,7 +129,7 @@ impl<R: io::Read> IndexBuilder<R> {
             *bvec.get_mut(end - 1).unwrap() = true;
         }
 
-        let sa = SuffixArray::new(&seq, self.k, self.bits);
+        let sa = SuffixArray::new(&seq, self.k, self.l);
         Ok(Index {
             seq,
             ends,
