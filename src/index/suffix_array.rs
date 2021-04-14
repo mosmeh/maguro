@@ -7,6 +7,17 @@ pub static STEP_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::Ato
 pub static FOUND_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 pub static SEARCH_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 
+fn hash_64(mut key: u64, mask: u64) -> u64 {
+    key = (!key + (key << 21)) & mask; // key = (key << 21) - key - 1;
+    key = key ^ key >> 24;
+    key = ((key + (key << 3)) + (key << 8)) & mask; // key * 265
+    key = key ^ key >> 14;
+    key = ((key + (key << 2)) + (key << 4)) & mask; // key * 21
+    key = key ^ key >> 28;
+    key = (key + (key << 31)) & mask;
+    return key;
+}
+
 #[derive(Serialize, Deserialize)]
 pub struct SuffixArray {
     pub ssa: Vec<u32>,
@@ -18,6 +29,9 @@ pub struct SuffixArray {
 impl SuffixArray {
     pub fn new(text: &[u8], k: usize, l: usize) -> Self {
         assert!(text.len() <= u32::MAX as usize + 1);
+        assert!(k < 31);
+        assert!(l < 16);
+        assert!(l < k);
 
         let sa = SA::<i32>::new(text);
         let array: Vec<_> = sa.sarray.into_iter().map(|x| x as u32).collect();
@@ -36,14 +50,16 @@ impl SuffixArray {
                 continue;
             }
 
-            let mut left = 0;
-            let mut right = 0;
-            for (j, x) in seq[..l].iter().enumerate() {
-                left |= (sequence::code_to_two_bit(*x) as u32) << (2 * j);
+            let mut bases = 0;
+            for (j, x) in seq[..k].iter().enumerate() {
+                bases |= (sequence::code_to_two_bit(*x) as u64) << (2 * j);
             }
-            for (j, x) in seq[l..k].iter().enumerate() {
-                right |= (sequence::code_to_two_bit(*x) as u32) << (2 * j);
-            }
+            //assert!(bases < (1 << (2 * k)));
+            bases = hash_64(bases, (1 << (2 * k)) - 1);
+
+            let left = (bases & ((1 << (2 * l)) - 1)) as u32;
+            let right = (bases >> (2 * l)) as u32;
+            //assert!(right as u64 == right as u64 & ((1 << (2 * (k - l))) - 1));
             left_to_indices[left as usize].insert(right, s);
         }
 
@@ -146,10 +162,13 @@ impl SuffixArray {
         //assert!(query.len() >= self.k && min_len >= self.k);
         SEARCH_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        let mut left = 0;
-        for (j, x) in query[..self.l].iter().enumerate() {
-            left |= (sequence::code_to_two_bit(*x) as u32) << (2 * j);
+        let mut bases = 0;
+        for (j, x) in query[..self.k].iter().enumerate() {
+            bases |= (sequence::code_to_two_bit(*x) as u64) << (2 * j);
         }
+        bases = hash_64(bases, (1 << (2 * self.k)) - 1);
+
+        let left = (bases & ((1 << (2 * self.l)) - 1)) as u32;
         let section_begin = self.offsets[left as usize];
         let section_end = self.offsets[left as usize + 1];
         if section_begin == section_end {
@@ -162,10 +181,7 @@ impl SuffixArray {
         let right_begin = (head_begin + num_rights) as usize;
         let right_end = head_end as usize;
 
-        let mut right = 0;
-        for (j, x) in query[self.l..self.k].iter().enumerate() {
-            right |= (sequence::code_to_two_bit(*x) as u32) << (2 * j);
-        }
+        let right = (bases >> (2 * self.l)) as u32;
         let idx = if let Ok(i) = self.ssa[right_begin..right_end].binary_search(&right) {
             i
         } else {
