@@ -4,6 +4,7 @@ use prettytable::{format::consts::FORMAT_CLEAN, *};
 use size::Size;
 use std::{fs::File, io::BufReader, path::PathBuf};
 use structopt::StructOpt;
+use xxhash_rust::xxh32::xxh32;
 
 #[derive(StructOpt)]
 pub struct StatsCommand {
@@ -104,10 +105,7 @@ impl Command for StatsCommand {
 
         let mut counts = vec![0; index.sa.offsets.len() - 1];
         for kmer in &kmers {
-            let mut left = 0;
-            for (j, x) in kmer[..maguro::index::suffix_array::L].iter().enumerate() {
-                left |= (maguro::sequence::code_to_two_bit(*x) as u32) << (2 * j);
-            }
+            let left = xxh32(&kmer, 0) as usize & index.sa.mask;
             counts[left as usize] += 1;
         }
         let mut collision = 0;
