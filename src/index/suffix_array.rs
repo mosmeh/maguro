@@ -2,27 +2,32 @@ use crate::sequence;
 use serde::{Deserialize, Serialize};
 use std::ops::Range;
 use sufsort_rs::sufsort::SA;
+use xxhash_rust::xxh32::xxh32;
 
 pub static STEP_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 pub static FOUND_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
 pub static SEARCH_COUNTER: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub const L: usize = 16;
 
 #[derive(Serialize, Deserialize)]
 pub struct SuffixArray {
     pub ssa: Vec<u32>,
     pub offsets: Vec<u32>,
     pub k: usize,
-    pub l: usize,
+    pub mask: usize,
 }
 
 impl SuffixArray {
-    pub fn new(text: &[u8], k: usize, l: usize) -> Self {
+    pub fn new(text: &[u8], k: usize, bits: usize) -> Self {
         assert!(text.len() <= u32::MAX as usize + 1);
+        assert!(L <= k && k < 32);
 
         let sa = SA::<i32>::new(text);
         let array: Vec<_> = sa.sarray.into_iter().map(|x| x as u32).collect();
 
-        let offsets_len = 1 << (2 * l);
+        let offsets_len = 1 << bits;
+        let mask = (1 << bits) - 1;
         let mut left_to_indices = vec![sorted_list::SortedList::new(); offsets_len];
         for s in array {
             if s as usize + k > text.len() {
@@ -36,12 +41,9 @@ impl SuffixArray {
                 continue;
             }
 
-            let mut left = 0;
+            let left = xxh32(&seq, 0) as usize & mask;
             let mut right = 0;
-            for (j, x) in seq[..l].iter().enumerate() {
-                left |= (sequence::code_to_two_bit(*x) as u32) << (2 * j);
-            }
-            for (j, x) in seq[l..k].iter().enumerate() {
+            for (j, x) in seq[..L].iter().enumerate() {
                 right |= (sequence::code_to_two_bit(*x) as u32) << (2 * j);
             }
             left_to_indices[left as usize].insert(right, s);
@@ -115,7 +117,12 @@ impl SuffixArray {
             }
         }*/
 
-        Self { ssa, offsets, k, l }
+        Self {
+            ssa,
+            offsets,
+            k,
+            mask,
+        }
     }
 
     /*pub fn search(&self, text: &[u8], query: &[u8]) -> Option<Range<usize>> {
@@ -146,10 +153,7 @@ impl SuffixArray {
         //assert!(query.len() >= self.k && min_len >= self.k);
         SEARCH_COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
-        let mut left = 0;
-        for (j, x) in query[..self.l].iter().enumerate() {
-            left |= (sequence::code_to_two_bit(*x) as u32) << (2 * j);
-        }
+        let left = xxh32(&query[..self.k], 0) as usize & self.mask;
         let section_begin = self.offsets[left as usize];
         let section_end = self.offsets[left as usize + 1];
         if section_begin == section_end {
@@ -163,7 +167,7 @@ impl SuffixArray {
         let right_end = head_end as usize;
 
         let mut right = 0;
-        for (j, x) in query[self.l..self.k].iter().enumerate() {
+        for (j, x) in query[..L].iter().enumerate() {
             right |= (sequence::code_to_two_bit(*x) as u32) << (2 * j);
         }
         let idx = if let Ok(i) = self.ssa[right_begin..right_end].binary_search(&right) {
@@ -197,8 +201,8 @@ impl SuffixArray {
         unsafe {
             equal_range(
                 &self.ssa,
-                text.as_ptr().add(self.k),
-                query.as_ptr().add(self.k),
+                text.as_ptr().add(L),
+                query.as_ptr().add(L),
                 query.as_ptr().add(min_len),
                 &mut begin,
                 &mut end,

@@ -105,7 +105,7 @@ impl Command for StatsCommand {
         let mut counts = vec![0; index.sa.offsets.len() - 1];
         for kmer in &kmers {
             let mut left = 0;
-            for (j, x) in kmer[..index.sa.l].iter().enumerate() {
+            for (j, x) in kmer[..maguro::index::suffix_array::L].iter().enumerate() {
                 left |= (maguro::sequence::code_to_two_bit(*x) as u32) << (2 * j);
             }
             counts[left as usize] += 1;
