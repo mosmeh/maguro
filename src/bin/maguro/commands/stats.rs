@@ -100,11 +100,11 @@ impl Command for StatsCommand {
         // k f array offsets buckets
         println!(
             "{}\t{}\t{}\t{}\t{}",
-            index.sa.k,
-            index.sa.f,
-            index.sa.array.len(),
-            index.sa.offsets.len(),
-            index.sa.buckets.len()
+            index.seq.len(),
+            index.ends.len(),
+            index.rank_dict.size_bytes(),
+            index.name_arena.len(),
+            index.name_ends.len(),
         );
 
         Ok(())
