@@ -83,7 +83,7 @@ impl Command for StatsCommand {
 
         table.printstd();*/
 
-        let mut non_zero = 0;
+        /*let mut non_zero = 0;
         for i in 0..(index.sa.offsets.len() - 1) {
             let len = index.sa.offsets[i + 1] - index.sa.offsets[i];
             if len > 0 {
@@ -132,27 +132,15 @@ impl Command for StatsCommand {
             }
             let end = index.sa.ssa[begin as usize];
             rights += end - begin;
-        }
+        }*/
 
-        // k buckets kmers util_count coll_count util coll max p50 p90 p99 p999 stddev offsets rank size/4bytes
+        // k l ssa offsets
         println!(
-            "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}",
+            "{}\t{}\t{}\t{}",
             index.sa.k,
-            index.sa.offsets.len() - 1,
-            kmers.len(),
-            non_zero,
-            collision,
-            non_zero as f64 * 100.0 / (index.sa.offsets.len() - 1) as f64,
-            collision as f64 * 100.0 / kmers.len() as f64,
-            hist.maximum().unwrap(),
-            hist.percentile(50.0).unwrap(),
-            hist.percentile(90.0).unwrap(),
-            hist.percentile(99.0).unwrap(),
-            hist.percentile(99.9).unwrap(),
-            hist.stddev().unwrap(),
-            index.sa.offsets.len() - 1,
-            0,
-            index.sa.offsets.len() + rights as usize
+            index.sa.l,
+            index.sa.ssa.len(),
+            index.sa.offsets.len()
         );
 
         Ok(())
