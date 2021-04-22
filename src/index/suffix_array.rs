@@ -62,6 +62,9 @@ impl SuffixArray {
                 idx |= (sequence::code_to_two_bit(*x) as usize) << (2 * j);
             }
             let w = ((offsets[idx + 1] - offsets[idx]).trailing_zeros() / 2) as usize;
+            if s as usize + k + w > text.len() {
+                continue;
+            }
             let seq2 = &text[s as usize + k..][..w];
             if seq2.iter().any(|x| *x == 0 || *x == sequence::DUMMY_CODE) {
                 continue;
